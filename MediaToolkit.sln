@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediaToolkit.Adapters.FFmpe
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediaToolkit.Core.Tests", "MediaToolkit.Core.Tests\MediaToolkit.Core.Tests.csproj", "{9B691CB6-3101-4CD4-9920-6448B2B9127F}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MediaToolkit.Demos", "MediaToolkit.Demos\MediaToolkit.Demos.csproj", "{5A0CEB2C-97C3-4CE1-956F-88C667FDDA71}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,9 +31,16 @@ Global
 		{9B691CB6-3101-4CD4-9920-6448B2B9127F}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9B691CB6-3101-4CD4-9920-6448B2B9127F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9B691CB6-3101-4CD4-9920-6448B2B9127F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5A0CEB2C-97C3-4CE1-956F-88C667FDDA71}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A0CEB2C-97C3-4CE1-956F-88C667FDDA71}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A0CEB2C-97C3-4CE1-956F-88C667FDDA71}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A0CEB2C-97C3-4CE1-956F-88C667FDDA71}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{5A0CEB2C-97C3-4CE1-956F-88C667FDDA71} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {315469B7-8714-4571-9AE4-6070A7C68E0C}
