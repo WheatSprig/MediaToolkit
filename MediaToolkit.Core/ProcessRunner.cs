@@ -9,6 +9,10 @@ namespace MediaToolkit.Core
     public class ProcessRunner
     {
         private readonly string _executablePath;
+
+        /// <summary>
+        /// 当进程接收到任何一行输出时触发（包括标准输出和标准错误）。
+        /// </summary>
         public event EventHandler<string> LogReceived;
 
         public ProcessRunner(string executablePath)
@@ -50,6 +54,8 @@ namespace MediaToolkit.Core
             {
                 if (e.Data == null) return;
                 stdOutput.AppendLine(e.Data);
+
+                // 触发日志接收事件
                 LogReceived?.Invoke(this, e.Data);
             };
 
@@ -57,6 +63,8 @@ namespace MediaToolkit.Core
             {
                 if (e.Data == null) return;
                 stdError.AppendLine(e.Data);
+
+                // 触发日志接收事件
                 LogReceived?.Invoke(this, e.Data);
             };
 
