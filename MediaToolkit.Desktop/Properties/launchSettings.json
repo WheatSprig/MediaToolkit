@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "MediaToolkit.Desktop": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}
