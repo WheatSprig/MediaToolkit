@@ -78,22 +78,33 @@ namespace MediaToolkit.Adapters.FFmpeg
             }
         }
 
-        public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken cancellationToken = default)
+        // 将 ExecuteAsync 方法拆分为一个更通用的私有方法
+        private async Task<ToolResult> ExecuteCommandAsync(string arguments, bool throwOnError, CancellationToken ct = default, string workingDirectory = null)
         {
-            // 在执行前重置时长，以便为下一次运行做准备，以防上一次运行的干扰
+            // 在每次执行前重置时长状态
             _totalDuration = TimeSpan.Zero;
-            return _runner.ExecuteAsync(arguments, cancellationToken);
+
+            var result = await _runner.ExecuteAsync(arguments, ct, workingDirectory);
+            if (throwOnError && result.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"FFmpeg failed with exit code {result.ExitCode}: {result.Error}");
+            }
+
+            return result;
+        }
+
+        // 公开的 ExecuteAsync 现在只是一个简单的代理
+        public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken ct = default, string workingDirectory = null)
+        {
+            return ExecuteCommandAsync(arguments, true, ct, workingDirectory);
         }
 
         public async Task ConvertAsync(string inputFile, string outputFile, string options = "", CancellationToken ct = default)
         {
             var arguments = $"-y -hide_banner -i \"{inputFile}\" {options} \"{outputFile}\"";
-            var result = await ExecuteAsync(arguments, ct);
 
-            if (result.ExitCode != 0)
-            {
-                throw new InvalidOperationException($"FFmpeg failed with exit code {result.ExitCode}: {result.Error}");
-            }
+            // 转码任务必须成功，所以 throwOnError: true
+            await ExecuteCommandAsync(arguments, true, ct);
         }
 
         private void ParseProgress(string log)
@@ -120,6 +131,7 @@ namespace MediaToolkit.Adapters.FFmpeg
         /// <param name="inputFile">输入文件路径。</param>
         /// <param name="outputManifestPath">输出的MPD清单文件路径 (例如 "C:\dash\stream.mpd")。</param>
         /// <param name="ct">取消令牌。</param>
+        // --- 重写 ConvertToDash1080pAsync 方法 ---
         public async Task ConvertToDash1080pAsync(string inputFile, string outputManifestPath, CancellationToken ct = default)
         {
             string outputDir = Path.GetDirectoryName(outputManifestPath);
@@ -128,31 +140,43 @@ namespace MediaToolkit.Adapters.FFmpeg
                 Directory.CreateDirectory(outputDir);
             }
 
-            // 这个参数集是生成DASH的关键，我们来逐一解释：
+            // 文件名不带路径，避免 MPD 写入绝对路径
+            string initSegName = "init-stream$RepresentationID$.m4s";
+            string mediaSegName = "chunk-stream$RepresentationID$-$Number%05d$.m4s";
+
+            // 我们在这里构建一个完整的、独立的命令行参数字符串
             string[] arguments = new string[]
             {
-                //"-y",                             // 覆盖输出文件
-                //"-hide_banner",
-                //$"-i \"{inputFile}\"",            // 输入文件
-                "-c:v libx264",                   // 使用x264视频编码器
-                "-preset veryfast",               // 编码速度预设，平衡速度和质量
-                "-profile:v high",                // H.264 profile
-                "-crf 22",                        // 恒定质量因子，22是很好的平衡点
-                "-b:v 5M",                        // 目标视频比特率: 5 Mbps
-                "-maxrate 6M",                    // 最大视频比特率: 6 Mbps
-                "-bufsize 10M",                   // 视频缓冲区大小
-                "-vf \"scale=-2:1080,fps=30\"",   // 视频滤镜: 缩放到1080p高度, 帧率30fps. -2确保宽度是偶数
-                "-c:a aac",                       // 使用AAC音频编码器
-                "-b:a 192k",                      // 音频比特率: 192 kbps
-                "-f dash",                        // 输出格式为DASH
-                "-seg_duration 4",                // 每个分片时长4秒
-                "-use_template 1",                // 使用模板命名分片
-                "-use_timeline 1",                // 使用timeline
-                //$"\"{outputManifestPath}\""       // 输出的MPD清单文件
+                "-y",                             // 覆盖输出文件
+                "-hide_banner",
+                $"-i \"{inputFile}\"",            // 输入文件
+                "-c:v libx264",                   // 视频编码
+                "-preset veryfast",               // 速度预设
+                "-profile:v high",
+                "-crf 22",                        // 质量因子
+                "-b:v 5M",                        // 目标比特率
+                "-maxrate 6M",                    // 最大比特率
+                "-bufsize 10M",                   // 缓冲区
+                "-vf \"scale=-2:1080,fps=30\"",   // 视频滤镜 (关键的引号)
+                "-c:a aac",                       // 音频编码
+                "-b:a 192k",                      // 音频比特率
+                "-f dash",                        // **核心：指定输出格式为DASH**
+                "-seg_duration 4",                // 分片时长
+                "-use_template 1",
+                "-use_timeline 1",
+                $"-init_seg_name {initSegName}",
+                $"-media_seg_name {mediaSegName}",
+                $"\"{Path.GetFileName(outputManifestPath)}\"",       // **核心：指定输出的清单文件**
+                "-loglevel verbose"
             };
 
-            string command = string.Join(" ", arguments);
-            await ConvertAsync(inputFile, outputManifestPath, command.Substring(command.IndexOf("-c:v"))); // 重新利用ConvertAsync的逻辑，但传递完整的命令
+            string fullCommand = string.Join(" ", arguments);
+
+            Console.WriteLine("FFmpeg 命令参数:");
+            Console.WriteLine(fullCommand);
+
+            // 直接调用底层的 ExecuteAsync，因为它需要成功，所以我们使用会抛出异常的版本
+            await this.ExecuteAsync(fullCommand, ct, workingDirectory: outputDir);
         }
 
         /// <summary>
@@ -160,22 +184,15 @@ namespace MediaToolkit.Adapters.FFmpeg
         /// </summary>
         public async Task<Metadata> GetMetadataAsync(string inputFile, CancellationToken ct = default)
         {
-            var arguments = $"-i \"{inputFile}\" -hide_banner";
+            // -v error: 只输出错误信息，避免不必要的警告污染输出
+            var arguments = $"-v error -i \"{inputFile}\" -hide_banner";
 
-            try
-            {
-                // 当只提供-i参数时，ffmpeg会打印元数据到stderr然后因缺少输出文件而失败退出。
-                // 我们期望它抛出异常，然后从异常信息中解析元数据。
-                await this.ExecuteAsync(arguments, ct);
+            // 调用新方法，并设置 throwOnError: false
+            // 这样即使ffmpeg因没有输出文件而返回非零代码，我们也不会抛出异常
+            var result = await ExecuteCommandAsync(arguments, false, ct);
 
-                // 理论上不会执行到这里，因为上面的调用会因ffmpeg非零退出码而抛出异常
-                return null;
-            }
-            catch (InvalidOperationException ex)
-            {
-                // 这正是我们期望的，异常信息中包含了元数据
-                return ParseMetadata(ex.Message);
-            }
+            // 我们从 ToolResult.Error (即 stderr) 中解析元数据
+            return ParseMetadata(result.Error);
         }
 
         private Metadata ParseMetadata(string ffmpegOutput)

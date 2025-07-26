@@ -9,6 +9,7 @@ namespace MediaToolkit.Core
         string ToolName { get; }
         string ExecutablePath { get; }
         event EventHandler<string> LogReceived;
-        Task<ToolResult> ExecuteAsync(string arguments, CancellationToken cancellationToken = default);
+        Task<ToolResult> ExecuteAsync(string arguments, CancellationToken cancellationToken = default, string workingDirectory = null);
+
     }
 }

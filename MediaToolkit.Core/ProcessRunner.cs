@@ -20,7 +20,7 @@ namespace MediaToolkit.Core
             this._executablePath = executablePath;
         }
 
-        public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken cancellationToken = default)
+        public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken cancellationToken = default, string workingDirectory = null)
         {
             var tcs = new TaskCompletionSource<ToolResult>();
 
@@ -33,7 +33,8 @@ namespace MediaToolkit.Core
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory
                 },
                 EnableRaisingEvents = true
             };

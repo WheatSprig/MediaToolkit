@@ -57,9 +57,12 @@ internal class Program
         Console.WriteLine("\n--- 演示1: 获取元数据 ---");
         var metadata = await ffmpeg.GetMetadataAsync(inputFile);
 
-        if (metadata == null)
+        // --- 增强了检查，确保元数据和其中的流信息都存在 ---
+        if (metadata?.Duration == TimeSpan.Zero)
         {
-            Console.WriteLine("无法获取元数据。");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  警告: 未能从文件中解析出元数据。可能是文件格式特殊或FFmpeg输出无法识别。");
+            Console.ResetColor();
             return;
         }
 
@@ -71,12 +74,21 @@ internal class Program
             Console.WriteLine($"    > 分辨率: {metadata.VideoStream.Resolution}");
             Console.WriteLine($"    > 帧率: {metadata.VideoStream.Fps} fps");
         }
+        else
+        {
+            Console.WriteLine("  视频信息: 未找到");
+        }
+
         if (metadata.AudioStream != null)
         {
             Console.WriteLine("  音频信息:");
             Console.WriteLine($"    > 格式: {metadata.AudioStream.Codec}");
             Console.WriteLine($"    > 采样率: {metadata.AudioStream.SampleRate}");
             Console.WriteLine($"    > 声道: {metadata.AudioStream.Channels}");
+        }
+        else
+        {
+            Console.WriteLine("  音频信息: 未找到");
         }
     }
 
@@ -85,17 +97,22 @@ internal class Program
         Console.WriteLine("\n--- 演示2: 转换为DASH流 (1080p) ---");
         var manifestPath = Path.Combine(outputDir, "stream.mpd");
 
-        // 订阅进度事件，提供实时反馈
-        ffmpeg.ProgressChanged += (sender, e) =>
-        {
-            var percent = (int)(e.Progress * 100);
-            Console.Write($"\r  处理中... [{new string('■', percent / 5).PadRight(20)}] {percent}%");
-        };
+        // 订阅进度事件
+        ffmpeg.ProgressChanged += OnProgressChanged;
 
         Console.WriteLine($"  输出目录: {outputDir}");
         await ffmpeg.ConvertToDash1080pAsync(inputFile, manifestPath);
 
+        // 取消订阅，避免影响其他任务
+        ffmpeg.ProgressChanged -= OnProgressChanged;
+
         Console.WriteLine("\n  DASH 转换完成!");
         Console.WriteLine($"  清单文件位于: {manifestPath}");
+    }
+
+    private static void OnProgressChanged(object sender, ProgressEventArgs e)
+    {
+        var percent = (int)(e.Progress * 100);
+        Console.Write($"\r  处理中... [{new string('■', percent / 5).PadRight(20)}] {percent}%");
     }
 }
