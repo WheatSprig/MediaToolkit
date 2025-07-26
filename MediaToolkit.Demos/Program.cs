@@ -110,7 +110,7 @@ internal class Program
         Console.WriteLine($"  清单文件位于: {manifestPath}");
     }
 
-    private static void OnProgressChanged(object sender, ProgressEventArgs e)
+    private static void OnProgressChanged(object? sender, ProgressEventArgs e)
     {
         var percent = (int)(e.Progress * 100);
         Console.Write($"\r  处理中... [{new string('■', percent / 5).PadRight(20)}] {percent}%");

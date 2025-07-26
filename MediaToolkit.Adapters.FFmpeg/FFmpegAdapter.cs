@@ -184,12 +184,24 @@ namespace MediaToolkit.Adapters.FFmpeg
         /// </summary>
         public async Task<Metadata> GetMetadataAsync(string inputFile, CancellationToken ct = default)
         {
-            // -v error: 只输出错误信息，避免不必要的警告污染输出
-            var arguments = $"-v error -i \"{inputFile}\" -hide_banner";
+            //quiet  → 完全不输出
+            //panic  → 只有 panic 级别的致命错误
+            //fatal  → 只有 fatal 错误
+            //error  → 只有错误信息
+            //warning → 错误 + 警告
+            //info    → 错误 + 警告 + 普通信息（默认就是这个）
+            //verbose → 在 info 基础上再详细一点
+            //debug   → 调试信息（非常详细）
+            //trace   → 比 debug 还详细，几乎逐帧逐字节
+
+            // -f null -
+            // -f null 表示不输出任何文件，只是获取元数据
+            // - 表示丢弃输出（即不保存到文件）
+            string arguments = $"-v info -i \"{inputFile}\" -hide_banner";
 
             // 调用新方法，并设置 throwOnError: false
             // 这样即使ffmpeg因没有输出文件而返回非零代码，我们也不会抛出异常
-            var result = await ExecuteCommandAsync(arguments, false, ct);
+            ToolResult result = await ExecuteCommandAsync(arguments, false, ct);
 
             // 我们从 ToolResult.Error (即 stderr) 中解析元数据
             return ParseMetadata(result.Error);
