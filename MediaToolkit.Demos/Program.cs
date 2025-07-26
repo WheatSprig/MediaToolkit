@@ -1,5 +1,6 @@
 ﻿// 在你的 Demos 项目的 Program.cs 中
 using MediaToolkit.Adapters.FFmpeg;
+using MediaToolkit.Core;
 using System;
 using System.IO;
 using System.Threading.Tasks;
@@ -8,6 +9,9 @@ internal class Program
 {
     static async Task Main(string[] args)
     {
+        // 确保在程序退出时清理所有注册的进程
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => ProcessRegistry.KillAll();
+
         Console.WriteLine("MediaToolkit .NET Standard 2.0 Demo");
 
         Console.WriteLine("请输入视频文件完整路径（可手动输入或右键粘贴）：");

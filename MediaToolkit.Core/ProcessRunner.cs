@@ -89,6 +89,8 @@ namespace MediaToolkit.Core
                 return tcs.Task;
             }
 
+            ProcessRegistry.Register(process); // 注册进程以便跟踪和管理
+
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
