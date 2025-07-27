@@ -1,5 +1,5 @@
-﻿// 在你的 Demos 项目的 Program.cs 中
-using MediaToolkit.Adapters.FFmpeg;
+﻿using MediaToolkit.Adapters.FFmpeg;
+using MediaToolkit.Adapters.FFmpeg.Models;
 using MediaToolkit.Core;
 using System;
 using System.IO;
@@ -101,11 +101,34 @@ internal class Program
         Console.WriteLine("\n--- 演示2: 转换为多种分辨率DASH流 (1080P+/1080P60/720P60/720P/480P/360P) ---");
         var manifestPath = Path.Combine(outputDir, "stream.mpd");
 
+        // 构造 DashOutputOptions
+        var options = new DashOutputOptions
+        {
+            InputFile = inputFile,
+            OutputDirectory = outputDir,
+            ManifestFileName = manifestPath,
+            SegmentDuration = 4,                       // 4 秒一片
+            VideoProfiles = new List<VideoStreamProfile>   // 6 条清晰度
+            {
+                new() { Resolution = "1920x1080", Bitrate = "5000k", Fps = 30 },
+                new() { Resolution = "1920x1080", Bitrate = "6000k", Fps = 60 },
+                new() { Resolution = "1280x720",  Bitrate = "2500k", Fps = 60 },
+                new() { Resolution = "1280x720",  Bitrate = "2000k", Fps = 30 },
+                new() { Resolution = "854x480",   Bitrate = "1000k", Fps = 30 },
+                new() { Resolution = "640x360",   Bitrate = "600k",  Fps = 30 }
+            },
+            AudioProfile = new AudioStreamProfile
+            {
+                Codec = "aac",
+                Bitrate = "128k"
+            }
+        };
+
         // 订阅进度事件
         ffmpeg.ProgressChanged += OnProgressChanged;
 
         Console.WriteLine($"  输出目录: {outputDir}");
-        await ffmpeg.ConvertToMultiDashAsync(inputFile, manifestPath,2);
+        await ffmpeg.GenerateDashAsync(options, threads: 2);
 
         // 取消订阅，避免影响其他任务
         ffmpeg.ProgressChanged -= OnProgressChanged;

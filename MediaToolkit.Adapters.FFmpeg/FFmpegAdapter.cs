@@ -1,9 +1,10 @@
-﻿using MediaToolkit.Core;
+﻿using MediaToolkit.Adapters.FFmpeg.Models;
+using MediaToolkit.Core;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -80,6 +81,12 @@ namespace MediaToolkit.Adapters.FFmpeg
             }
         }
 
+        // 公开的 ExecuteAsync 现在只是一个简单的代理
+        public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken ct = default, string workingDirectory = null)
+        {
+            return ExecuteCommandAsync(arguments, true, ct, workingDirectory);
+        }
+
         // 将 ExecuteAsync 方法拆分为一个更通用的私有方法
         private async Task<ToolResult> ExecuteCommandAsync(string arguments, bool throwOnError, CancellationToken ct = default, string workingDirectory = null)
         {
@@ -95,10 +102,159 @@ namespace MediaToolkit.Adapters.FFmpeg
             return result;
         }
 
-        // 公开的 ExecuteAsync 现在只是一个简单的代理
-        public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken ct = default, string workingDirectory = null)
+
+        /// <summary>
+        /// 异步生成 DASH（Dynamic Adaptive Streaming over HTTP）自适应码流。
+        /// 根据给定的 <paramref name="options"/> 中的视频/音频配置，自动检测硬件编码器并一次性生成
+        /// 多分辨率、多码率的 DASH 内容（MPD 清单 + 切片）。
+        /// </summary>
+        /// <param name="options">
+        /// 输出配置，包括输入文件、输出目录、视频/音频编码参数、切片时长等。
+        /// 必须至少指定一条视频配置，音频可选。
+        /// </param>
+        /// <param name="threads">
+        /// 指定 FFmpeg 编码线程数。  
+        /// 小于等于 0 时交由 FFmpeg 自动选择；大于 0 时使用指定值。
+        /// </param>
+        /// <param name="ct">
+        /// 用于取消异步操作的令牌。
+        /// </param>
+        /// <returns>
+        /// 一个 <see cref="Task"/>，表示整个 DASH 打包过程的完成。
+        /// 完成后可在 <see cref="DashOutputOptions.OutputDirectory"/> 中找到 MPD 清单和所有切片文件。
+        /// </returns>
+        /// <exception cref="ArgumentException">
+        /// 当 <paramref name="options"/> 或其 <see cref="DashOutputOptions.VideoProfiles"/> 为 <c>null</c> 或空时抛出。
+        /// </exception>
+        /// <remarks>
+        /// 工作流程：
+        /// <list type="number">
+        ///   <item>自动检测最适合的硬件编码器（NVIDIA/AMD/Intel/QSV）。</item>
+        ///   <item>根据提供的 <see cref="DashOutputOptions.VideoProfiles"/> 构建 <c>filter_complex</c>，
+        ///       为每条 profile 生成对应的分辨率、帧率、码率输出。</item>
+        ///   <item>如果提供了 <see cref="DashOutputOptions.AudioProfile"/>，则同时转码并映射音频。</item>
+        ///   <item>调用 FFmpeg 生成符合 DASH-IF 规范的 MPD 清单、初始化切片（init）及媒体切片（chunk）。</item>
+        ///   <item>所有输出文件均写入 <see cref="DashOutputOptions.OutputDirectory"/>。</item>
+        /// </list>
+        /// 调用者可通过 <paramref name="ct"/> 随时取消任务；取消后所有已生成的文件会被保留。
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// var options = new DashOutputOptions
+        /// {
+        ///     InputFile         = "source.mp4",
+        ///     OutputDirectory   = @"C:\dash_output",
+        ///     ManifestFileName  = "manifest.mpd",
+        ///     SegmentDuration   = 4,
+        ///     VideoProfiles     = new List<VideoStreamProfile>
+        ///     {
+        ///         new() { Resolution = "1920x1080", Bitrate = "5000k", Fps = 30 },
+        ///         new() { Resolution = "1280x720",  Bitrate = "2500k", Fps = 30 },
+        ///         new() { Resolution = "854x480",   Bitrate = "1000k", Fps = 30 }
+        ///     },
+        ///     AudioProfile = new AudioProfile { Codec = "aac", Bitrate = "128k" }
+        /// };
+        ///
+        /// await adapter.GenerateDashAsync(options, threads: 0);
+        /// </code>
+        /// </example>
+        public async Task GenerateDashAsync(DashOutputOptions options, int threads = 0, CancellationToken ct = default)
         {
-            return ExecuteCommandAsync(arguments, true, ct, workingDirectory);
+            if (options?.VideoProfiles == null || !options.VideoProfiles.Any())
+            {
+                throw new ArgumentException("At least one video profile must be specified.", nameof(options));
+            }
+
+            if (!Directory.Exists(options.OutputDirectory))
+            {
+                Directory.CreateDirectory(options.OutputDirectory);
+            }
+
+            var selector = new HardwareEncoderSelector(this);
+            await selector.DetectBestEncoderAsync();
+            string videoEncoder = selector.SelectedVideoEncoder; // 使用自动检测的硬件编码器
+
+            var argsBuilder = new List<string>
+            {
+                "-y",
+                "-hide_banner",
+                $"-i \"{options.InputFile}\""
+            };
+
+            // 构建 filter_complex
+            var filterParts = new List<string>();
+            var videoOutputs = new List<string>();
+
+            // [0:v]split=N[v1][v2]...[vN]
+            string splitOutputs = string.Join("", Enumerable.Range(1, options.VideoProfiles.Count).Select(i => $"[v{i}]"));
+            filterParts.Add($"[0:v]split={options.VideoProfiles.Count}{splitOutputs}");
+
+            for (int i = 0; i < options.VideoProfiles.Count; i++)
+            {
+                var profile = options.VideoProfiles[i];
+                // 解析分辨率，支持 "1920x1080" 和 "1080" 两种格式
+                string scale = profile.Resolution.Contains("x")
+                    ? $"scale={profile.Resolution}"
+                    : $"scale=-2:{profile.Resolution}";
+
+                string fpsFilter = profile.Fps.HasValue ? $",fps={profile.Fps.Value}" : "";
+
+                string outputTag = $"[vout{i + 1}]";
+                filterParts.Add($"[v{i + 1}]{scale}{fpsFilter}{outputTag}");
+                videoOutputs.Add(outputTag);
+            }
+
+            argsBuilder.Add($"-filter_complex \"{string.Join(";", filterParts)}\"");
+
+            if (threads > 0)
+            {
+                argsBuilder.Add($"-threads {threads}");
+            }
+
+            // 映射视频流
+            for (int i = 0; i < options.VideoProfiles.Count; i++)
+            {
+                var profile = options.VideoProfiles[i];
+                argsBuilder.Add($"-map \"{videoOutputs[i]}\"");
+                argsBuilder.Add($"-c:v:{i} {videoEncoder}");
+                argsBuilder.Add($"-b:v:{i} {profile.Bitrate}");
+                if (!string.IsNullOrEmpty(profile.MaxRate)) argsBuilder.Add($"-maxrate:v:{i} {profile.MaxRate}");
+                if (!string.IsNullOrEmpty(profile.BufferSize)) argsBuilder.Add($"-bufsize:v:{i} {profile.BufferSize}");
+            }
+
+            // 映射音频流
+            if (options.AudioProfile != null)
+            {
+                var profile = options.AudioProfile;
+                argsBuilder.Add("-map a:0");
+                argsBuilder.Add($"-c:a {profile.Codec}");
+                argsBuilder.Add($"-b:a {profile.Bitrate}");
+            }
+
+            // 添加 DASH 参数
+            string initSegName = "init-stream$RepresentationID$.m4s";
+            string mediaSegName = "chunk-stream$RepresentationID$-$Number%05d$.m4s";
+
+            argsBuilder.AddRange(new[]
+            {
+                "-f dash",
+                $"-seg_duration {options.SegmentDuration}",
+                "-use_template 1",
+                "-use_timeline 1",
+                $"-init_seg_name {initSegName}",
+                $"-media_seg_name {mediaSegName}",
+                $"-adaptation_sets \"id=0,streams=v id=1,streams=a\"", // 假设视频和音频在不同的 adaptation set
+                $"-loglevel info",
+                $"\"{Path.GetFileName(options.ManifestFileName)}\""
+            });
+
+            string fullCommand = string.Join(" ", argsBuilder);
+
+            Console.WriteLine("动态生成的 FFmpeg DASH 命令:");
+            Console.WriteLine(fullCommand);
+
+            // 使用适配器自身的执行器，自动获得进度、日志等所有好处
+            await this.ExecuteAsync(fullCommand, ct, workingDirectory: options.OutputDirectory);
         }
 
         public async Task ConvertAsync(string inputFile, string outputFile, string options = "", int threads = 0, CancellationToken ct = default)
@@ -135,131 +291,32 @@ namespace MediaToolkit.Adapters.FFmpeg
         /// <param name="inputFile">输入文件路径。</param>
         /// <param name="outputManifestPath">输出的MPD清单文件路径 (例如 "C:\dash\stream.mpd")。</param>
         /// <param name="ct">取消令牌。</param>
-        // --- 重写 ConvertToDash1080pAsync 方法 ---
-        public async Task ConvertToDash1080pAsync(string inputFile, string outputManifestPath, int threads = 0, CancellationToken ct = default)
+        public Task ConvertToDash1080pAsync(string inputFile, string outputManifestPath, int threads = 0, CancellationToken ct = default)
         {
-            string outputDir = Path.GetDirectoryName(outputManifestPath);
-            if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
+            var options = new DashOutputOptions
             {
-                Directory.CreateDirectory(outputDir);
-            }
-
-            // 文件名不带路径，避免 MPD 写入绝对路径
-            string initSegName = "init-stream$RepresentationID$.m4s";
-            string mediaSegName = "chunk-stream$RepresentationID$-$Number%05d$.m4s";
-
-            string threadOption = threads > 0 ? $"-threads {threads}" : "";
-
-            // 在这里构建一个完整的、独立的命令行参数字符串
-            string[] arguments = new string[]
-            {
-                "-y",                               // 覆盖输出文件
-                "-hide_banner",
-                $"-i \"{inputFile}\"",              // 输入文件
-                "-c:v libx264",                     // 视频编码
-                "-preset veryfast",                 // 速度预设
-                "-profile:v high",
-                threadOption,                       // 将线程参数加入到这里
-                "-crf 22",                          // 质量因子
-                "-b:v 5M",                          // 目标比特率
-                "-maxrate 6M",                      // 最大比特率
-                "-bufsize 10M",                     // 缓冲区
-                "-vf \"scale=-2:1080,fps=30\"",     // 视频滤镜 (关键的引号)
-                "-c:a aac",                         // 音频编码
-                "-b:a 192k",                        // 音频比特率
-                "-f dash",                          // **核心：指定输出格式为DASH**
-                "-seg_duration 4",                  // 分片时长
-                "-use_template 1",
-                "-use_timeline 1",
-                $"-init_seg_name {initSegName}",
-                $"-media_seg_name {mediaSegName}",
-                $"\"{Path.GetFileName(outputManifestPath)}\"",  // **核心：指定输出的清单文件**
-                "-loglevel verbose"
+                InputFile = inputFile,
+                OutputDirectory = Path.GetDirectoryName(outputManifestPath),
+                ManifestFileName = Path.GetFileName(outputManifestPath),
+                VideoProfiles = new List<VideoStreamProfile>
+                {
+                    new VideoStreamProfile
+                    {
+                        Resolution = "1080",
+                        Bitrate = "5M",
+                        MaxRate = "6M",
+                        BufferSize = "10M",
+                        Fps = 30
+                    }
+                },
+                AudioProfile = new AudioStreamProfile
+                {
+                    Bitrate = "192k"
+                }
             };
 
-            string fullCommand = string.Join(" ", arguments);
-
-            Console.WriteLine("FFmpeg 命令参数:");
-            Console.WriteLine(fullCommand);
-
-            // 直接调用底层的 ExecuteAsync，因为它需要成功，所以我们使用会抛出异常的版本
-            await this.ExecuteAsync(fullCommand, ct, workingDirectory: outputDir);
+            return GenerateDashAsync(options, threads, ct);
         }
-
-        public async Task ConvertToMultiDashAsync(string inputFile, string outputManifestPath, int threads = 0, CancellationToken ct = default)
-        {
-            string outputDir = Path.GetDirectoryName(outputManifestPath);
-            if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
-            {
-                Directory.CreateDirectory(outputDir);
-            }
-
-            string initSegName = "init-stream$RepresentationID$.m4s";
-            string mediaSegName = "chunk-stream$RepresentationID$-$Number%05d$.m4s";
-
-            var selector = new HardwareEncoderSelector(this);
-            await selector.DetectBestEncoderAsync();
-
-            string videoEncoder = selector.SelectedVideoEncoder;
-
-            string filter = string.Join(";", new[]
-            {
-                "[0:v]split=6[v1][v2][v3][v4][v5][v6]",
-                "[v1]scale=-2:1080,fps=30[vout1]",
-                "[v2]scale=-2:1080,fps=60[vout2]",
-                "[v3]scale=-2:720,fps=60[vout3]",
-                "[v4]scale=-2:720,fps=30[vout4]",
-                "[v5]scale=-2:480[vout5]",
-                "[v6]scale=-2:360[vout6]"
-            });
-
-            var argsBuilder = new List<string>
-            {
-                "-y",
-                "-hide_banner",
-                $"-i \"{inputFile}\"",
-                $"-filter_complex \"{filter}\"", // 复杂滤镜可能仍然在CPU上运行
-
-                // 添加线程参数
-                // 注意：-threads 通常放在输入文件之后，编码器参数之前，或者作为全局选项
-                // 对于多路输出，可以尝试放在 -i 之后，或者针对每个编码器单独设置（如果编码器支持）
-                // 这里我们作为全局选项添加
-            };
-
-            if (threads > 0)
-            {
-                argsBuilder.Add($"-threads {threads}");
-            }
-
-            argsBuilder.AddRange(new[]
-            {
-                "-map [vout1]", $"-c:v:0 {videoEncoder}", "-b:v:0 5M", "-maxrate:v:0 6M", "-bufsize:v:0 10M",
-                "-map [vout2]", $"-c:v:1 {videoEncoder}", "-b:v:1 6M", "-maxrate:v:1 7M", "-bufsize:v:1 10M",
-                "-map [vout3]", $"-c:v:2 {videoEncoder}", "-b:v:2 4M", "-maxrate:v:2 5M", "-bufsize:v:2 8M",
-                "-map [vout4]", $"-c:v:3 {videoEncoder}", "-b:v:3 3M", "-maxrate:v:3 4M", "-bufsize:v:3 6M",
-                "-map [vout5]", $"-c:v:4 {videoEncoder}", "-b:v:4 1M", "-maxrate:v:4 1.5M", "-bufsize:v:4 2M",
-                "-map [vout6]", $"-c:v:5 {videoEncoder}", "-b:v:5 0.6M", "-maxrate:v:5 1M", "-bufsize:v:5 1.5M",
-
-                "-map a:0", "-c:a aac", "-b:a 192k",
-
-                "-f dash",
-                "-seg_duration 4",
-                "-use_template 1",
-                "-use_timeline 1",
-                $"-init_seg_name {initSegName}",
-                $"-media_seg_name {mediaSegName}",
-                $"\"{Path.GetFileName(outputManifestPath)}\"",
-                "-loglevel info"
-            });
-
-            string fullCommand = string.Join(" ", argsBuilder);
-
-            Console.WriteLine("FFmpeg 多规格 DASH 命令:");
-            Console.WriteLine(fullCommand);
-
-            await this.ExecuteAsync(fullCommand, ct, workingDirectory: outputDir);
-        }
-
 
         /// <summary>
         /// 异步获取媒体文件的元数据。
