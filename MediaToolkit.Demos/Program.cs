@@ -98,14 +98,14 @@ internal class Program
 
     private static async Task DemoConvertToDashAsync(FFmpegAdapter ffmpeg, string inputFile, string outputDir)
     {
-        Console.WriteLine("\n--- 演示2: 转换为DASH流 (1080p) ---");
+        Console.WriteLine("\n--- 演示2: 转换为多种分辨率DASH流 (1080P+/1080P60/720P60/720P/480P/360P) ---");
         var manifestPath = Path.Combine(outputDir, "stream.mpd");
 
         // 订阅进度事件
         ffmpeg.ProgressChanged += OnProgressChanged;
 
         Console.WriteLine($"  输出目录: {outputDir}");
-        await ffmpeg.ConvertToDash1080pAsync(inputFile, manifestPath);
+        await ffmpeg.ConvertToMultiDashAsync(inputFile, manifestPath,2);
 
         // 取消订阅，避免影响其他任务
         ffmpeg.ProgressChanged -= OnProgressChanged;

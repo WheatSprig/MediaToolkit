@@ -1,5 +1,7 @@
 ﻿using MediaToolkit.Core;
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -99,9 +101,11 @@ namespace MediaToolkit.Adapters.FFmpeg
             return ExecuteCommandAsync(arguments, true, ct, workingDirectory);
         }
 
-        public async Task ConvertAsync(string inputFile, string outputFile, string options = "", CancellationToken ct = default)
+        public async Task ConvertAsync(string inputFile, string outputFile, string options = "", int threads = 0, CancellationToken ct = default)
         {
-            var arguments = $"-y -hide_banner -i \"{inputFile}\" {options} \"{outputFile}\"";
+            // 如果指定了线程数且大于0，则添加到 options 中
+            string threadOption = threads > 0 ? $"-threads {threads}" : "";
+            var arguments = $"-y -hide_banner -i \"{inputFile}\" {options}  {threadOption} \"{outputFile}\"";
 
             // 转码任务必须成功，所以 throwOnError: true
             await ExecuteCommandAsync(arguments, true, ct);
@@ -132,7 +136,7 @@ namespace MediaToolkit.Adapters.FFmpeg
         /// <param name="outputManifestPath">输出的MPD清单文件路径 (例如 "C:\dash\stream.mpd")。</param>
         /// <param name="ct">取消令牌。</param>
         // --- 重写 ConvertToDash1080pAsync 方法 ---
-        public async Task ConvertToDash1080pAsync(string inputFile, string outputManifestPath, CancellationToken ct = default)
+        public async Task ConvertToDash1080pAsync(string inputFile, string outputManifestPath, int threads = 0, CancellationToken ct = default)
         {
             string outputDir = Path.GetDirectoryName(outputManifestPath);
             if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
@@ -144,29 +148,32 @@ namespace MediaToolkit.Adapters.FFmpeg
             string initSegName = "init-stream$RepresentationID$.m4s";
             string mediaSegName = "chunk-stream$RepresentationID$-$Number%05d$.m4s";
 
-            // 我们在这里构建一个完整的、独立的命令行参数字符串
+            string threadOption = threads > 0 ? $"-threads {threads}" : "";
+
+            // 在这里构建一个完整的、独立的命令行参数字符串
             string[] arguments = new string[]
             {
-                "-y",                             // 覆盖输出文件
+                "-y",                               // 覆盖输出文件
                 "-hide_banner",
-                $"-i \"{inputFile}\"",            // 输入文件
-                "-c:v libx264",                   // 视频编码
-                "-preset veryfast",               // 速度预设
+                $"-i \"{inputFile}\"",              // 输入文件
+                "-c:v libx264",                     // 视频编码
+                "-preset veryfast",                 // 速度预设
                 "-profile:v high",
-                "-crf 22",                        // 质量因子
-                "-b:v 5M",                        // 目标比特率
-                "-maxrate 6M",                    // 最大比特率
-                "-bufsize 10M",                   // 缓冲区
-                "-vf \"scale=-2:1080,fps=30\"",   // 视频滤镜 (关键的引号)
-                "-c:a aac",                       // 音频编码
-                "-b:a 192k",                      // 音频比特率
-                "-f dash",                        // **核心：指定输出格式为DASH**
-                "-seg_duration 4",                // 分片时长
+                threadOption,                       // 将线程参数加入到这里
+                "-crf 22",                          // 质量因子
+                "-b:v 5M",                          // 目标比特率
+                "-maxrate 6M",                      // 最大比特率
+                "-bufsize 10M",                     // 缓冲区
+                "-vf \"scale=-2:1080,fps=30\"",     // 视频滤镜 (关键的引号)
+                "-c:a aac",                         // 音频编码
+                "-b:a 192k",                        // 音频比特率
+                "-f dash",                          // **核心：指定输出格式为DASH**
+                "-seg_duration 4",                  // 分片时长
                 "-use_template 1",
                 "-use_timeline 1",
                 $"-init_seg_name {initSegName}",
                 $"-media_seg_name {mediaSegName}",
-                $"\"{Path.GetFileName(outputManifestPath)}\"",       // **核心：指定输出的清单文件**
+                $"\"{Path.GetFileName(outputManifestPath)}\"",  // **核心：指定输出的清单文件**
                 "-loglevel verbose"
             };
 
@@ -178,6 +185,81 @@ namespace MediaToolkit.Adapters.FFmpeg
             // 直接调用底层的 ExecuteAsync，因为它需要成功，所以我们使用会抛出异常的版本
             await this.ExecuteAsync(fullCommand, ct, workingDirectory: outputDir);
         }
+
+        public async Task ConvertToMultiDashAsync(string inputFile, string outputManifestPath, int threads = 0, CancellationToken ct = default)
+        {
+            string outputDir = Path.GetDirectoryName(outputManifestPath);
+            if (!string.IsNullOrEmpty(outputDir) && !Directory.Exists(outputDir))
+            {
+                Directory.CreateDirectory(outputDir);
+            }
+
+            string initSegName = "init-stream$RepresentationID$.m4s";
+            string mediaSegName = "chunk-stream$RepresentationID$-$Number%05d$.m4s";
+
+            var selector = new HardwareEncoderSelector(this);
+            await selector.DetectBestEncoderAsync();
+
+            string videoEncoder = selector.SelectedVideoEncoder;
+
+            string filter = string.Join(";", new[]
+            {
+                "[0:v]split=6[v1][v2][v3][v4][v5][v6]",
+                "[v1]scale=-2:1080,fps=30[vout1]",
+                "[v2]scale=-2:1080,fps=60[vout2]",
+                "[v3]scale=-2:720,fps=60[vout3]",
+                "[v4]scale=-2:720,fps=30[vout4]",
+                "[v5]scale=-2:480[vout5]",
+                "[v6]scale=-2:360[vout6]"
+            });
+
+            var argsBuilder = new List<string>
+            {
+                "-y",
+                "-hide_banner",
+                $"-i \"{inputFile}\"",
+                $"-filter_complex \"{filter}\"", // 复杂滤镜可能仍然在CPU上运行
+
+                // 添加线程参数
+                // 注意：-threads 通常放在输入文件之后，编码器参数之前，或者作为全局选项
+                // 对于多路输出，可以尝试放在 -i 之后，或者针对每个编码器单独设置（如果编码器支持）
+                // 这里我们作为全局选项添加
+            };
+
+            if (threads > 0)
+            {
+                argsBuilder.Add($"-threads {threads}");
+            }
+
+            argsBuilder.AddRange(new[]
+            {
+                "-map [vout1]", $"-c:v:0 {videoEncoder}", "-b:v:0 5M", "-maxrate:v:0 6M", "-bufsize:v:0 10M",
+                "-map [vout2]", $"-c:v:1 {videoEncoder}", "-b:v:1 6M", "-maxrate:v:1 7M", "-bufsize:v:1 10M",
+                "-map [vout3]", $"-c:v:2 {videoEncoder}", "-b:v:2 4M", "-maxrate:v:2 5M", "-bufsize:v:2 8M",
+                "-map [vout4]", $"-c:v:3 {videoEncoder}", "-b:v:3 3M", "-maxrate:v:3 4M", "-bufsize:v:3 6M",
+                "-map [vout5]", $"-c:v:4 {videoEncoder}", "-b:v:4 1M", "-maxrate:v:4 1.5M", "-bufsize:v:4 2M",
+                "-map [vout6]", $"-c:v:5 {videoEncoder}", "-b:v:5 0.6M", "-maxrate:v:5 1M", "-bufsize:v:5 1.5M",
+
+                "-map a:0", "-c:a aac", "-b:a 192k",
+
+                "-f dash",
+                "-seg_duration 4",
+                "-use_template 1",
+                "-use_timeline 1",
+                $"-init_seg_name {initSegName}",
+                $"-media_seg_name {mediaSegName}",
+                $"\"{Path.GetFileName(outputManifestPath)}\"",
+                "-loglevel info"
+            });
+
+            string fullCommand = string.Join(" ", argsBuilder);
+
+            Console.WriteLine("FFmpeg 多规格 DASH 命令:");
+            Console.WriteLine(fullCommand);
+
+            await this.ExecuteAsync(fullCommand, ct, workingDirectory: outputDir);
+        }
+
 
         /// <summary>
         /// 异步获取媒体文件的元数据。
