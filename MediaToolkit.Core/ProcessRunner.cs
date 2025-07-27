@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,7 +35,7 @@ namespace MediaToolkit.Core
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    WorkingDirectory = workingDirectory ?? Environment.CurrentDirectory
+                    WorkingDirectory = workingDirectory ?? Path.GetTempPath()  // 使用临时目录作为更安全的后备
                 },
                 EnableRaisingEvents = true
             };
