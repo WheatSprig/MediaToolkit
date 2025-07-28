@@ -13,6 +13,7 @@ namespace MediaToolkit.Adapters.FFmpeg
 {
     public class FFmpegAdapter : IMediaToolAdapter
     {
+        #region 常量和字段
         public string ToolName => "ffmpeg";
         public string ExecutablePath { get; }
 
@@ -50,7 +51,9 @@ namespace MediaToolkit.Adapters.FFmpeg
         
         // 提取整体比特率，FFmpeg 通常会在 Duration 行报告
         private static readonly Regex OverallBitrateRegex = new Regex(@"bitrate: (\d+\.?\d*)\s*([kM]?b\/s)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        #endregion
 
+        #region 构造函数
         public FFmpegAdapter(string ffmpegPath = null)
         {
             ExecutablePath = ToolFinder.FindExecutablePath(ToolName, ffmpegPath);
@@ -60,6 +63,9 @@ namespace MediaToolkit.Adapters.FFmpeg
             _runner.LogReceived += OnRunnerLogReceived;
         }
 
+        #endregion
+
+        #region 事件处理
         /// <summary>
         /// 实现事件处理器，在这里进行解析
         /// </summary>
@@ -94,7 +100,9 @@ namespace MediaToolkit.Adapters.FFmpeg
                 }
             }
         }
+        #endregion
 
+        #region 执行命令
         // 公开的 ExecuteAsync 现在只是一个简单的代理
         public Task<ToolResult> ExecuteAsync(string arguments, CancellationToken ct = default, string workingDirectory = null)
         {
@@ -116,7 +124,19 @@ namespace MediaToolkit.Adapters.FFmpeg
             return result;
         }
 
+        /// 异步执行 FFmpeg 命令，返回 ToolResult
+        public async Task ConvertAsync(string inputFile, string outputFile, string options = "", int threads = 0, CancellationToken ct = default)
+        {
+            // 如果指定了线程数且大于0，则添加到 options 中
+            string threadOption = threads > 0 ? $"-threads {threads}" : "";
+            var arguments = $"-y -hide_banner -i \"{inputFile}\" {options}  {threadOption} \"{outputFile}\"";
 
+            // 转码任务必须成功，所以 throwOnError: true
+            await ExecuteCommandAsync(arguments, true, ct);
+        }
+        #endregion
+
+        #region 生成 DASH 和 FMP4 流
         /// <summary>
         /// 异步生成 DASH（Dynamic Adaptive Streaming over HTTP）自适应码流。
         /// 根据给定的 <paramref name="options"/> 中的视频/音频配置，自动检测硬件编码器并一次性生成
@@ -271,45 +291,6 @@ namespace MediaToolkit.Adapters.FFmpeg
             await this.ExecuteAsync(fullCommand, ct, workingDirectory: options.OutputDirectory);
         }
 
-        public async Task ConvertAsync(string inputFile, string outputFile, string options = "", int threads = 0, CancellationToken ct = default)
-        {
-            // 如果指定了线程数且大于0，则添加到 options 中
-            string threadOption = threads > 0 ? $"-threads {threads}" : "";
-            var arguments = $"-y -hide_banner -i \"{inputFile}\" {options}  {threadOption} \"{outputFile}\"";
-
-            // 转码任务必须成功，所以 throwOnError: true
-            await ExecuteCommandAsync(arguments, true, ct);
-        }
-
-        /// <summary>
-        /// 解析日志行中的“总时长”与“已处理时长”信息，并在获得新的进度时触发 <see cref="ProgressChanged"/> 事件。（当前方法已经合并到了OnRunnerLogReceived，后续删除）
-        /// </summary>
-        /// <remarks>
-        /// 1. 若尚未获取到总时长（<see cref="_totalDuration"/> 为 <see cref="TimeSpan.Zero"/>），
-        ///    则先尝试用 <see cref="DurationRegex"/> 从 <paramref name="log"/> 中提取并解析总时长。<br/>
-        /// 2. 无论总时长是否已知，都会继续用 <see cref="ProgressRegex"/> 提取当前已处理的时长。<br/>
-        /// 3. 当成功解析到已处理时长后，通过 <see cref="ProgressChanged"/> 事件将进度信息
-        ///    （已处理时长和总时长）通知给订阅者。
-        /// </remarks>
-        /// <param name="log">待解析的日志行文本。</param>
-        private void ParseProgress(string log)
-        {
-            if (_totalDuration == TimeSpan.Zero)
-            {
-                var match = DurationRegex.Match(log);
-                if (match.Success && TimeSpan.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture, out var duration))
-                {
-                    _totalDuration = duration;
-                }
-            }
-
-            var progressMatch = ProgressRegex.Match(log);
-            if (progressMatch.Success && TimeSpan.TryParse(progressMatch.Groups[1].Value, CultureInfo.InvariantCulture, out var processed))
-            {
-                ProgressChanged?.Invoke(this, new ProgressEventArgs(processed, _totalDuration));
-            }
-        }
-
         /// <summary>
         /// 将视频转换为适用于网络流媒体的DASH格式 (单码率1080p)。
         /// </summary>
@@ -343,6 +324,9 @@ namespace MediaToolkit.Adapters.FFmpeg
             return GenerateDashAsync(options, threads, ct);
         }
 
+        #endregion
+
+        #region 获取媒体元数据
         /// <summary>
         /// 异步获取媒体文件的元数据。
         /// </summary>
@@ -439,6 +423,188 @@ namespace MediaToolkit.Adapters.FFmpeg
 
             return metadata;
         }
+        #endregion
+
+        #region 生成 伪FMP4媒体 流
+        /// <summary>
+        /// 异步生成单个文件的 FMP4 (Fragmented MP4) 格式流，支持 Range 请求。
+        /// 可以选择将视频和音频分离为不同的文件。
+        /// </summary>
+        /// <param name="options">
+        /// 输出配置，包括输入文件、输出文件、视频/音频编码参数、是否分离音视频等。
+        /// 必须指定 InputFile 和 OutputFile。
+        /// </param>
+        /// <param name="threads">
+        /// 指定 FFmpeg 编码线程数。
+        /// 小于等于 0 时交由 FFmpeg 自动选择；大于 0 时使用指定值。
+        /// </param>
+        /// <param name="ct">
+        /// 用于取消异步操作的令牌。
+        /// </param>
+        /// <returns>
+        /// 一个 <see cref="Task"/>，表示 FMP4 生成过程的完成。
+        /// </returns>
+        /// <exception cref="ArgumentException">
+        /// 当 <paramref name="options"/> 为 <c>null</c> 或缺少必要路径时抛出。
+        /// </exception>
+        /// <remarks>
+        /// 此方法利用 FFmpeg 的 `-movflags +faststart+frag_keyframe+separate_moof`
+        /// 以及 `-f m4s` (或直接输出 .mp4 文件) 来生成单文件 FMP4。
+        /// 当 <see cref="Fmp4OutputOptions.SeparateAudioVideo"/> 为 true 时，
+        /// 视频文件将是 <see cref="Fmp4OutputOptions.OutputFile"/>，音频文件将在同目录下生成。
+        /// </remarks>
+        /// <example>
+        /// <code>
+        /// var adapter = new FFmpegAdapter();
+        /// var fmp4Options = new Fmp4OutputOptions
+        /// {
+        ///     InputFile = "input.mp4",
+        ///     OutputFile = "output_video.m4s", // 或 output_video.mp4
+        ///     VideoProfile = new VideoStreamProfile
+        ///     {
+        ///         Resolution = "1920x1080",
+        ///         Bitrate = "5M",
+        ///         // Fps = 30 // 可选
+        ///     },
+        ///     AudioProfile = new AudioStreamProfile
+        ///     {
+        ///         Bitrate = "128k"
+        ///     },
+        ///     SeparateAudioVideo = true // 如果需要分离音视频
+        /// };
+        /// await adapter.GenerateFmp4StreamAsync(fmp4Options);
+        /// </code>
+        /// </example>
+        public async Task GenerateFmp4StreamAsync(Fmp4OutputOptions options, int threads = 0, CancellationToken ct = default)
+        {
+            if (options == null || string.IsNullOrEmpty(options.InputFile) || string.IsNullOrEmpty(options.OutputFile))
+            {
+                throw new ArgumentException("InputFile and OutputFile must be specified.", nameof(options));
+            }
+
+            var argsBuilder = new List<string>
+            {
+                "-y", // 覆盖输出文件
+                "-hide_banner",
+                $"-i \"{options.InputFile}\""
+            };
+
+            // 添加通用 FMP4 标志
+            // faststart: 将 moov box 移到文件开头，便于快速播放
+            // frag_keyframe: 在每个关键帧处开始新的片段，提高 SEEK 精度
+            // separate_moof: 将每个片段的 moof box 放置在片段数据之前，便于解析
+            argsBuilder.Add("-movflags +faststart+frag_keyframe+separate_moof");
+
+            string videoOutputFile = options.OutputFile;
+            string audioOutputFile = null;
+
+            if (options.SeparateAudioVideo)
+            {
+                // 分离音视频时，音频文件命名为 output_audio.m4a 或 .mp4
+                string outputDir = Path.GetDirectoryName(options.OutputFile);
+                string outputFileNameWithoutExtension = Path.GetFileNameWithoutExtension(options.OutputFile);
+                audioOutputFile = Path.Combine(outputDir, $"{outputFileNameWithoutExtension}_audio.m4a"); // 通常音频使用 .m4a 扩展名
+            }
+
+            // --- 视频处理 ---
+            if (options.VideoProfile != null)
+            {
+                var vp = options.VideoProfile;
+                var selector = new HardwareEncoderSelector(this);
+                await selector.DetectBestEncoderAsync(); // 尝试检测硬件编码器
+                string videoEncoder = selector.SelectedVideoEncoder;
+
+                argsBuilder.Add("-map 0:v:0"); // 映射视频流
+                argsBuilder.Add($"-c:v {videoEncoder}"); // 使用检测到的编码器
+                if (!string.IsNullOrEmpty(vp.Resolution))
+                {
+                    // 解析分辨率，支持 "1920x1080" 和 "1080" 两种格式
+                    string scale = vp.Resolution.Contains("x")
+                        ? $"scale={vp.Resolution}"
+                        : $"scale=-2:{vp.Resolution}";
+                    argsBuilder.Add($"-vf {scale}"); // 视频滤镜进行缩放
+                }
+                if (!string.IsNullOrEmpty(vp.Bitrate)) argsBuilder.Add($"-b:v {vp.Bitrate}");
+                if (!string.IsNullOrEmpty(vp.MaxRate)) argsBuilder.Add($"-maxrate:v {vp.MaxRate}");
+                if (!string.IsNullOrEmpty(vp.BufferSize)) argsBuilder.Add($"-bufsize:v {vp.BufferSize}");
+                if (vp.Fps.HasValue) argsBuilder.Add($"-r {vp.Fps.Value}"); // 帧率
+
+                // 针对单文件FMP4，通常建议使用libx264或硬件编码器
+                // -preset 和 -crf 可以作为 CustomOptions 传入
+            }
+            else
+            {
+                // 如果没有指定视频 profile，则默认复制视频流
+                argsBuilder.Add("-map 0:v:0 -c:v copy");
+            }
+
+
+            // --- 音频处理 ---
+            if (options.AudioProfile != null)
+            {
+                var ap = options.AudioProfile;
+                argsBuilder.Add("-map 0:a:0"); // 映射音频流
+                argsBuilder.Add($"-c:a {ap.Codec ?? "aac"}"); // 默认 AAC 编码
+                if (!string.IsNullOrEmpty(ap.Bitrate)) argsBuilder.Add($"-b:a {ap.Bitrate}");
+                // 可以添加更多音频选项，例如 -ar (采样率), -ac (通道数)
+            }
+            else
+            {
+                // 如果没有指定音频 profile，则默认复制音频流
+                argsBuilder.Add("-map 0:a:0 -c:a copy");
+            }
+
+            // 自定义选项（例如 -preset fast -crf 22）
+            if (!string.IsNullOrEmpty(options.CustomOptions))
+            {
+                argsBuilder.Add(options.CustomOptions);
+            }
+
+            if (threads > 0)
+            {
+                argsBuilder.Add($"-threads {threads}");
+            }
+
+            // 输出格式指定为 m4s 或 mp4
+            // 对于单文件 FMP4，通常输出文件扩展名为 .mp4 也能很好地工作，
+            // 且更常见。m4s 更多用于 DASH/HLS 的分段文件。
+            // 这里我们使用 .mp4 作为默认输出，但可以由用户指定。
+            argsBuilder.Add($"-f mp4 \"{videoOutputFile}\"");
+
+
+            string fullCommand = string.Join(" ", argsBuilder);
+
+            Console.WriteLine("动态生成的 FFmpeg FMP4 Stream 命令:");
+            Console.WriteLine(fullCommand);
+
+            await this.ExecuteAsync(fullCommand, ct, workingDirectory: Path.GetDirectoryName(options.OutputFile));
+
+            // 如果需要分离音频，则再执行一次 FFmpeg 命令生成音频文件
+            if (options.SeparateAudioVideo && audioOutputFile != null)
+            {
+                Console.WriteLine("动态生成的 FFmpeg FMP4 Audio Stream 命令:");
+                var audioArgsBuilder = new List<string>
+                {
+                    "-y",
+                    "-hide_banner",
+                    $"-i \"{options.InputFile}\"",
+                    "-map 0:a:0", // 仅映射音频流
+                    $"-c:a {options.AudioProfile?.Codec ?? "aac"}", // 使用或默认 AAC
+                    options.AudioProfile != null && !string.IsNullOrEmpty(options.AudioProfile.Bitrate) ? $"-b:a {options.AudioProfile.Bitrate}" : "",
+                    "-movflags +faststart+frag_keyframe+separate_moof", // 对音频同样应用 FMP4 标志
+                    $"-f mp4 \"{audioOutputFile}\"" // 输出为 mp4 格式的音频文件
+                };
+                if (threads > 0)
+                {
+                    audioArgsBuilder.Add($"-threads {threads}");
+                }
+                string audioCommand = string.Join(" ", audioArgsBuilder.Where(s => !string.IsNullOrEmpty(s))); // 过滤空字符串
+
+                Console.WriteLine(audioCommand);
+                await this.ExecuteAsync(audioCommand, ct, workingDirectory: Path.GetDirectoryName(options.OutputFile));
+            }
+        }
+        #endregion
 
         // 在 Dispose 或 Finalizer 中取消订阅事件是个好习惯，此处为简化省略
     }
