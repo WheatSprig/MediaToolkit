@@ -27,5 +27,8 @@ namespace MediaToolkit.Adapters.FFmpeg.Models
         public TimeSpan Duration { get; internal set; }
         public VideoStreamInfo VideoStream { get; internal set; }
         public AudioStreamInfo AudioStream { get; internal set; }
+        
+        // 媒体的总码率
+        public double OverallBitrateKbps { get; set; }
     }
 }

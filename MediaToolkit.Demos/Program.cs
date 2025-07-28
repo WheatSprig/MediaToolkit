@@ -61,8 +61,8 @@ internal class Program
         Console.WriteLine("\n--- 演示1: 获取元数据 ---");
         var metadata = await ffmpeg.GetMetadataAsync(inputFile);
 
-        // --- 增强了检查，确保元数据和其中的流信息都存在 ---
-        if (metadata?.Duration == TimeSpan.Zero)
+        // 增强检查：如果 Duration 为 0 或 null，认为解析失败
+        if (metadata == null || metadata.Duration == TimeSpan.Zero)
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("  警告: 未能从文件中解析出元数据。可能是文件格式特殊或FFmpeg输出无法识别。");
@@ -70,13 +70,16 @@ internal class Program
             return;
         }
 
-        Console.WriteLine($"  时长: {metadata.Duration}");
+        Console.WriteLine($"  时长: {metadata.Duration:c}");
+        Console.WriteLine($"  整体码率: {metadata.OverallBitrateKbps:N0} Kbps");
+
         if (metadata.VideoStream != null)
         {
             Console.WriteLine("  视频信息:");
-            Console.WriteLine($"    > 格式: {metadata.VideoStream.Codec}");
-            Console.WriteLine($"    > 分辨率: {metadata.VideoStream.Resolution}");
-            Console.WriteLine($"    > 帧率: {metadata.VideoStream.Fps} fps");
+            Console.WriteLine($"    > 编码格式: {metadata.VideoStream.Codec}");
+            Console.WriteLine($"    > 分辨率  : {metadata.VideoStream.Resolution}");
+            Console.WriteLine($"    > 帧率    : {metadata.VideoStream.Fps:N2} fps");
+            Console.WriteLine($"    > 码率    : {metadata.VideoStream.BitrateKbps:N0} Kbps ({metadata.VideoStream.BitrateMode ?? "未知"})");
         }
         else
         {
@@ -85,10 +88,12 @@ internal class Program
 
         if (metadata.AudioStream != null)
         {
-            Console.WriteLine("  音频信息:");
-            Console.WriteLine($"    > 格式: {metadata.AudioStream.Codec}");
-            Console.WriteLine($"    > 采样率: {metadata.AudioStream.SampleRate}");
-            Console.WriteLine($"    > 声道: {metadata.AudioStream.Channels}");
+            Console.WriteLine("  视频信息:");
+
+            Console.WriteLine($"    > 编码格式: {metadata.AudioStream.Codec}");
+            Console.WriteLine($"    > 采样率  : {metadata.AudioStream.SampleRate}");
+            Console.WriteLine($"    > 声道    : {metadata.AudioStream.Channels}");
+            Console.WriteLine($"    > 码率    : {(metadata.AudioStream.BitrateKbps.HasValue ? $"{metadata.AudioStream.BitrateKbps:N0} Kbps" : "N/A")} ({metadata.AudioStream.BitrateMode ?? "未知"})");
         }
         else
         {

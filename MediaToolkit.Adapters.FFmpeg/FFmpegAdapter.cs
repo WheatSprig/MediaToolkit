@@ -33,9 +33,23 @@ namespace MediaToolkit.Adapters.FFmpeg
 
         // 用于解析元数据的正则表达式
         // 匹配: Stream #0:0(...): Video: h264 (...), yuv420p, 1920x1080, 29.97 fps
-        private static readonly Regex VideoStreamRegex = new Regex(@"Stream #\d:\d.*: Video: ([\w\d]+).*?(\d{3,5}x\d{3,5}).*?([\d\.]+)\s+fps", RegexOptions.Compiled);
-        // 匹配: Stream #0:1(...): Audio: aac (LC), 48000 Hz, stereo
-        private static readonly Regex AudioStreamRegex = new Regex(@"Stream #\d:\d.*: Audio: ([\w\d]+).*?(\d+\s*Hz).*?(\w+)", RegexOptions.Compiled);
+        // 稍作修改以捕获比特率信息 (例如: 1234 kb/s) 和码率模式
+        // 注意：FFmpeg 对 CBR/VBR 的直接标记不一致，通常需要推断或根据上下文判断。
+        // 这里先尝试捕获码率。码率模式的解析可能更复杂，需要进一步的规则。
+        // 例如: Stream #0:0: Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709/bt709/iec61966-2-1), 1920x1080 [SAR 1:1 DAR 16:9], 3804 kb/s, 29.97 fps, 29.97 tbr, 30k tbn, 59.94 tbc (default)
+        private static readonly Regex VideoStreamRegex = new Regex(
+            @"Stream #\d:\d.*?: Video: ([\w\d]+).*?(\d{3,5}x\d{3,5}).*?(?:,\s*(\d+)\s*kb\/s)?.*?([\d\.]+)\s+fps",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase
+        );
+        
+        // 匹配: Stream #0:1(...): Audio: aac (LC), 48000 Hz, stereo, 128 kb/s
+        private static readonly Regex AudioStreamRegex = new Regex(
+            @"Stream #\d:\d.*?: Audio: ([\w\d]+).*?(\d+\s*Hz).*?(\w+)(?:,\s*(\d+)\s*kb\/s)?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase
+        );
+        
+        // 提取整体比特率，FFmpeg 通常会在 Duration 行报告
+        private static readonly Regex OverallBitrateRegex = new Regex(@"bitrate: (\d+\.?\d*)\s*([kM]?b\/s)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public FFmpegAdapter(string ffmpegPath = null)
         {
@@ -267,6 +281,17 @@ namespace MediaToolkit.Adapters.FFmpeg
             await ExecuteCommandAsync(arguments, true, ct);
         }
 
+        /// <summary>
+        /// 解析日志行中的“总时长”与“已处理时长”信息，并在获得新的进度时触发 <see cref="ProgressChanged"/> 事件。（当前方法已经合并到了OnRunnerLogReceived，后续删除）
+        /// </summary>
+        /// <remarks>
+        /// 1. 若尚未获取到总时长（<see cref="_totalDuration"/> 为 <see cref="TimeSpan.Zero"/>），
+        ///    则先尝试用 <see cref="DurationRegex"/> 从 <paramref name="log"/> 中提取并解析总时长。<br/>
+        /// 2. 无论总时长是否已知，都会继续用 <see cref="ProgressRegex"/> 提取当前已处理的时长。<br/>
+        /// 3. 当成功解析到已处理时长后，通过 <see cref="ProgressChanged"/> 事件将进度信息
+        ///    （已处理时长和总时长）通知给订阅者。
+        /// </remarks>
+        /// <param name="log">待解析的日志行文本。</param>
         private void ParseProgress(string log)
         {
             if (_totalDuration == TimeSpan.Zero)
@@ -357,28 +382,59 @@ namespace MediaToolkit.Adapters.FFmpeg
                 metadata.Duration = duration;
             }
 
+            // 解析整体比特率
+            var overallBitrateMatch = OverallBitrateRegex.Match(ffmpegOutput);
+            if (overallBitrateMatch.Success && double.TryParse(overallBitrateMatch.Groups[1].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var overallBitrate))
+            {
+                metadata.OverallBitrateKbps = overallBitrate;
+            }
+
             // 解析视频流
             var videoMatch = VideoStreamRegex.Match(ffmpegOutput);
             if (videoMatch.Success)
             {
-                metadata.VideoStream = new VideoStreamInfo
+                var videoStream = new VideoStreamInfo
                 {
                     Codec = videoMatch.Groups[1].Value,
                     Resolution = videoMatch.Groups[2].Value,
-                    Fps = double.TryParse(videoMatch.Groups[3].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var fps) ? fps : 0
+                    Fps = double.TryParse(videoMatch.Groups[4].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var fps) ? fps : 0
                 };
+
+                // 尝试解析视频码率
+                if (videoMatch.Groups[3].Success && double.TryParse(videoMatch.Groups[3].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var videoBitrate))
+                {
+                    videoStream.BitrateKbps = videoBitrate;
+                    // 对于 BitrateMode，需要更高级的逻辑来推断，因为 FFmpeg 不直接输出 "CBR" 或 "VBR"。
+                    // 暂时可以不设置或设置为 null。
+                    // videoStream.BitrateMode = "VBR"; // 示例：如果编码器默认是 VBR
+                }
+
+                metadata.VideoStream = videoStream;
             }
 
             // 解析音频流
             var audioMatch = AudioStreamRegex.Match(ffmpegOutput);
             if (audioMatch.Success)
             {
-                metadata.AudioStream = new AudioStreamInfo
+                var audioStream = new AudioStreamInfo
                 {
                     Codec = audioMatch.Groups[1].Value,
                     SampleRate = audioMatch.Groups[2].Value,
                     Channels = audioMatch.Groups[3].Value
                 };
+
+                // 尝试解析音频码率
+                if (audioMatch.Groups[4].Success && double.TryParse(audioMatch.Groups[4].Value, NumberStyles.Any, CultureInfo.InvariantCulture, out var audioBitrate))
+                {
+                    audioStream.BitrateKbps = audioBitrate;
+                    // 对于 BitrateMode，同视频流，暂时不设置或设置为 null。
+                }
+                else
+                {
+                    audioStream.BitrateKbps = null; // 如果没有找到码率，设置为 null
+                }
+
+                metadata.AudioStream = audioStream;
             }
 
             return metadata;
