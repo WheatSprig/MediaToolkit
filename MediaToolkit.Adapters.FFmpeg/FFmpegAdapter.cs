@@ -427,182 +427,147 @@ namespace MediaToolkit.Adapters.FFmpeg
 
         #region 生成 伪FMP4媒体 流
         /// <summary>
-        /// 异步生成单个文件的 FMP4 (Fragmented MP4) 格式流，支持 Range 请求。
-        /// 可以选择将视频和音频分离为不同的文件。
+        /// 异步生成一个单文件的、碎片化的MP4（fMP4），适用于通过HTTP Range请求进行高效流式传输。
+        /// 该文件将包含优化的 moov atom 和分段的 mdat atom，允许播放器在不下载整个文件的情况下开始播放。
         /// </summary>
-        /// <param name="options">
-        /// 输出配置，包括输入文件、输出文件、视频/音频编码参数、是否分离音视频等。
-        /// 必须指定 InputFile 和 OutputFile。
-        /// </param>
-        /// <param name="threads">
-        /// 指定 FFmpeg 编码线程数。
-        /// 小于等于 0 时交由 FFmpeg 自动选择；大于 0 时使用指定值。
-        /// </param>
-        /// <param name="ct">
-        /// 用于取消异步操作的令牌。
-        /// </param>
-        /// <returns>
-        /// 一个 <see cref="Task"/>，表示 FMP4 生成过程的完成。
-        /// </returns>
-        /// <exception cref="ArgumentException">
-        /// 当 <paramref name="options"/> 为 <c>null</c> 或缺少必要路径时抛出。
-        /// </exception>
+        /// <param name="options">生成 fMP4 的配置选项，包括输入/输出文件、编码参数等。</param>
+        /// <param name="threads">指定 FFmpeg 编码线程数。小于等于 0 时交由 FFmpeg 自动选择。</param>
+        /// <param name="ct">用于取消异步操作的令牌。</param>
+        /// <returns>一个表示异步操作完成的 Task。</returns>
+        /// <exception cref="ArgumentException">当 options 或其关键属性（如 InputFile, OutputFile）为 null 或无效时抛出。</exception>
         /// <remarks>
-        /// 此方法利用 FFmpeg 的 `-movflags +faststart+frag_keyframe+separate_moof`
-        /// 以及 `-f m4s` (或直接输出 .mp4 文件) 来生成单文件 FMP4。
-        /// 当 <see cref="Fmp4OutputOptions.SeparateAudioVideo"/> 为 true 时，
-        /// 视频文件将是 <see cref="Fmp4OutputOptions.OutputFile"/>，音频文件将在同目录下生成。
+        /// 此方法通过设置 `-movflags +faststart+frag_keyframe+separate_moof` 来实现。
+        /// - `+faststart`: 将 moov atom（元数据）移动到文件开头，加速在线播放的启动。
+        /// - `+frag_keyframe`: 创建基于关键帧的片段。
+        /// - `+separate_moof`: 为每个片段（fragment）生成独立的 moof atom，这是实现 seek 和按需加载的关键。
+        /// - `-f m4s`: 指定输出格式为 MPEG-4 Stream，这是生成 fMP4 的推荐格式。
         /// </remarks>
         /// <example>
         /// <code>
         /// var adapter = new FFmpegAdapter();
-        /// var fmp4Options = new Fmp4OutputOptions
+        /// var options = new FragmentedMp4Options
         /// {
-        ///     InputFile = "input.mp4",
-        ///     OutputFile = "output_video.m4s", // 或 output_video.mp4
-        ///     VideoProfile = new VideoStreamProfile
-        ///     {
-        ///         Resolution = "1920x1080",
-        ///         Bitrate = "5M",
-        ///         // Fps = 30 // 可选
-        ///     },
-        ///     AudioProfile = new AudioStreamProfile
-        ///     {
-        ///         Bitrate = "128k"
-        ///     },
-        ///     SeparateAudioVideo = true // 如果需要分离音视频
+        ///     InputFile = "source.mp4",
+        ///     OutputFile = @"C:\output\streamable.m4s",
+        ///     Crf = 23,
+        ///     Preset = "medium",
+        ///     Resolution = "1920x1080"
         /// };
-        /// await adapter.GenerateFmp4StreamAsync(fmp4Options);
+        /// await adapter.GenerateFragmentedMp4Async(options);
+        /// 
+        /// // 生成一个只有音频的 fMP4 文件
+        /// var audioOnlyOptions = new FragmentedMp4Options
+        /// {
+        ///     InputFile = "source.mp4",
+        ///     OutputFile = @"C:\output\audio_only.m4s",
+        ///     OmitVideo = true, // 忽略视频轨道
+        ///     AudioBitrate = "192k"
+        /// };
+        /// await adapter.GenerateFragmentedMp4Async(audioOnlyOptions);
         /// </code>
         /// </example>
-        public async Task GenerateFmp4StreamAsync(Fmp4OutputOptions options, int threads = 0, CancellationToken ct = default)
+        public async Task GenerateFragmentedMp4Async(FragmentedMp4Options options, int threads = 0, CancellationToken ct = default)
         {
-            if (options == null || string.IsNullOrEmpty(options.InputFile) || string.IsNullOrEmpty(options.OutputFile))
+            if (options == null)
             {
-                throw new ArgumentException("InputFile and OutputFile must be specified.", nameof(options));
+                throw new ArgumentNullException(nameof(options));
+            }
+            if (string.IsNullOrWhiteSpace(options.InputFile))
+            {
+                throw new ArgumentException("InputFile must be specified.", nameof(options.InputFile));
+            }
+            if (string.IsNullOrWhiteSpace(options.OutputFile))
+            {
+                throw new ArgumentException("OutputFile must be specified.", nameof(options.OutputFile));
+            }
+            if (options.OmitAudio && options.OmitVideo)
+            {
+                throw new ArgumentException("Cannot omit both audio and video streams.");
+            }
+
+            // 分离出输出目录和文件名
+            var outputDirectory = Path.GetDirectoryName(options.OutputFile);
+            var outputFileName = Path.GetFileName(options.OutputFile);
+
+            if (!string.IsNullOrEmpty(outputDirectory) && !Directory.Exists(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
             }
 
             var argsBuilder = new List<string>
             {
-                "-y", // 覆盖输出文件
+                "-y",
                 "-hide_banner",
                 $"-i \"{options.InputFile}\""
             };
 
-            // 添加通用 FMP4 标志
-            // faststart: 将 moov box 移到文件开头，便于快速播放
-            // frag_keyframe: 在每个关键帧处开始新的片段，提高 SEEK 精度
-            // separate_moof: 将每个片段的 moof box 放置在片段数据之前，便于解析
-            argsBuilder.Add("-movflags +faststart+frag_keyframe+separate_moof");
-
-            string videoOutputFile = options.OutputFile;
-            string audioOutputFile = null;
-
-            if (options.SeparateAudioVideo)
+            // 视频编码设置
+            if (!options.OmitVideo)
             {
-                // 分离音视频时，音频文件命名为 output_audio.m4a 或 .mp4
-                string outputDir = Path.GetDirectoryName(options.OutputFile);
-                string outputFileNameWithoutExtension = Path.GetFileNameWithoutExtension(options.OutputFile);
-                audioOutputFile = Path.Combine(outputDir, $"{outputFileNameWithoutExtension}_audio.m4a"); // 通常音频使用 .m4a 扩展名
-            }
-
-            // --- 视频处理 ---
-            if (options.VideoProfile != null)
-            {
-                var vp = options.VideoProfile;
-                var selector = new HardwareEncoderSelector(this);
-                await selector.DetectBestEncoderAsync(); // 尝试检测硬件编码器
-                string videoEncoder = selector.SelectedVideoEncoder;
-
-                argsBuilder.Add("-map 0:v:0"); // 映射视频流
-                argsBuilder.Add($"-c:v {videoEncoder}"); // 使用检测到的编码器
-                if (!string.IsNullOrEmpty(vp.Resolution))
+                argsBuilder.Add($"-c:v {options.VideoCodec}");
+                if (!string.IsNullOrWhiteSpace(options.Preset))
                 {
-                    // 解析分辨率，支持 "1920x1080" 和 "1080" 两种格式
-                    string scale = vp.Resolution.Contains("x")
-                        ? $"scale={vp.Resolution}"
-                        : $"scale=-2:{vp.Resolution}";
-                    argsBuilder.Add($"-vf {scale}"); // 视频滤镜进行缩放
+                    argsBuilder.Add($"-preset {options.Preset}");
                 }
-                if (!string.IsNullOrEmpty(vp.Bitrate)) argsBuilder.Add($"-b:v {vp.Bitrate}");
-                if (!string.IsNullOrEmpty(vp.MaxRate)) argsBuilder.Add($"-maxrate:v {vp.MaxRate}");
-                if (!string.IsNullOrEmpty(vp.BufferSize)) argsBuilder.Add($"-bufsize:v {vp.BufferSize}");
-                if (vp.Fps.HasValue) argsBuilder.Add($"-r {vp.Fps.Value}"); // 帧率
-
-                // 针对单文件FMP4，通常建议使用libx264或硬件编码器
-                // -preset 和 -crf 可以作为 CustomOptions 传入
+                if (options.Crf.HasValue)
+                {
+                    argsBuilder.Add($"-crf {options.Crf.Value}");
+                }
+                if (!string.IsNullOrWhiteSpace(options.Resolution))
+                {
+                    argsBuilder.Add($"-s {options.Resolution}");
+                }
+                if (options.OutputFps.HasValue)
+                {
+                    argsBuilder.Add($"-vf \"fps={options.OutputFps.Value}\"");
+                    // 更高级插值方案，如果需要使用 minterpolate 插件来插帧，插值滤镜 minterpolate 对 CPU 要求较高，适合高质量输出，可以取消注释以下行
+                    //argsBuilder.Add($"-vf \"minterpolate='fps={options.OutputFps.Value}'\"");
+                }
             }
             else
             {
-                // 如果没有指定视频 profile，则默认复制视频流
-                argsBuilder.Add("-map 0:v:0 -c:v copy");
+                argsBuilder.Add("-vn"); // -vn 表示 no video
             }
 
-
-            // --- 音频处理 ---
-            if (options.AudioProfile != null)
+            // 音频编码设置
+            if (!options.OmitAudio)
             {
-                var ap = options.AudioProfile;
-                argsBuilder.Add("-map 0:a:0"); // 映射音频流
-                argsBuilder.Add($"-c:a {ap.Codec ?? "aac"}"); // 默认 AAC 编码
-                if (!string.IsNullOrEmpty(ap.Bitrate)) argsBuilder.Add($"-b:a {ap.Bitrate}");
-                // 可以添加更多音频选项，例如 -ar (采样率), -ac (通道数)
+                argsBuilder.Add($"-c:a {options.AudioCodec}");
+                if (!string.IsNullOrWhiteSpace(options.AudioBitrate))
+                {
+                    argsBuilder.Add($"-b:a {options.AudioBitrate}");
+                }
             }
             else
             {
-                // 如果没有指定音频 profile，则默认复制音频流
-                argsBuilder.Add("-map 0:a:0 -c:a copy");
+                argsBuilder.Add("-an"); // -an 表示 no audio
             }
 
-            // 自定义选项（例如 -preset fast -crf 22）
-            if (!string.IsNullOrEmpty(options.CustomOptions))
-            {
-                argsBuilder.Add(options.CustomOptions);
-            }
-
+            // 线程设置
             if (threads > 0)
             {
                 argsBuilder.Add($"-threads {threads}");
             }
 
-            // 输出格式指定为 m4s 或 mp4
-            // 对于单文件 FMP4，通常输出文件扩展名为 .mp4 也能很好地工作，
-            // 且更常见。m4s 更多用于 DASH/HLS 的分段文件。
-            // 这里我们使用 .mp4 作为默认输出，但可以由用户指定。
-            argsBuilder.Add($"-f mp4 \"{videoOutputFile}\"");
+            // 核心的流媒体格式化参数
+            // faststart: 将 moov box 移到文件开头，便于快速播放
+            // frag_keyframe: 在每个关键帧处开始新的片段，提高 SEEK 精度
+            // separate_moof: 将每个片段的 moof box 放置在片段数据之前，便于解析
+            argsBuilder.Add("-movflags +faststart+frag_keyframe+separate_moof");
 
+            // 输出格式和路径
+            // 使用 .m4s 扩展名是常见的做法，以明确表示这是一个媒体段文件，
+            // 但 .mp4 同样有效，因为其内部结构是兼容的。
+            argsBuilder.Add("-f mp4");
+            argsBuilder.Add($"\"{options.OutputFile}\"");
 
             string fullCommand = string.Join(" ", argsBuilder);
 
-            Console.WriteLine("动态生成的 FFmpeg FMP4 Stream 命令:");
+            Console.WriteLine("动态生成的 FFmpeg Fragmented MP4 命令:");
             Console.WriteLine(fullCommand);
 
-            await this.ExecuteAsync(fullCommand, ct, workingDirectory: Path.GetDirectoryName(options.OutputFile));
-
-            // 如果需要分离音频，则再执行一次 FFmpeg 命令生成音频文件
-            if (options.SeparateAudioVideo && audioOutputFile != null)
-            {
-                Console.WriteLine("动态生成的 FFmpeg FMP4 Audio Stream 命令:");
-                var audioArgsBuilder = new List<string>
-                {
-                    "-y",
-                    "-hide_banner",
-                    $"-i \"{options.InputFile}\"",
-                    "-map 0:a:0", // 仅映射音频流
-                    $"-c:a {options.AudioProfile?.Codec ?? "aac"}", // 使用或默认 AAC
-                    options.AudioProfile != null && !string.IsNullOrEmpty(options.AudioProfile.Bitrate) ? $"-b:a {options.AudioProfile.Bitrate}" : "",
-                    "-movflags +faststart+frag_keyframe+separate_moof", // 对音频同样应用 FMP4 标志
-                    $"-f mp4 \"{audioOutputFile}\"" // 输出为 mp4 格式的音频文件
-                };
-                if (threads > 0)
-                {
-                    audioArgsBuilder.Add($"-threads {threads}");
-                }
-                string audioCommand = string.Join(" ", audioArgsBuilder.Where(s => !string.IsNullOrEmpty(s))); // 过滤空字符串
-
-                Console.WriteLine(audioCommand);
-                await this.ExecuteAsync(audioCommand, ct, workingDirectory: Path.GetDirectoryName(options.OutputFile));
-            }
+            // 复用现有的执行逻辑，以获得进度报告和错误处理
+            await this.ExecuteAsync(fullCommand, ct, workingDirectory: outputDirectory);
         }
         #endregion
 
