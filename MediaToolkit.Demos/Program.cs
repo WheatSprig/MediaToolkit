@@ -164,7 +164,14 @@ internal class Program
                 Resolution = "1920x1080",
                 Preset = "fast",
                 Crf = 22,
-                AudioBitrate = "192k"
+                MaxBitrate = "5000k",
+                MinBitrate = "1000k",
+                OutputFps = 30,
+                AudioBitrate = "192k",
+                GopSize = 48,
+                Profile = "main",
+                Level = "4.0",
+                SceneCutThreshold = 0
             };
 
             await ffmpeg.GenerateFragmentedMp4Async(optionsMerged, threads: 2);
@@ -193,6 +200,8 @@ internal class Program
                 Resolution = "1280x720",
                 Preset = "medium",
                 Crf = 23,
+                GopSize = 48,
+                SceneCutThreshold = 0,
                 OmitAudio = true // 关键：忽略音频轨道
             };
             await ffmpeg.GenerateFragmentedMp4Async(optionsVideoOnly, threads: 2);

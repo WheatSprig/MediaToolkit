@@ -501,6 +501,9 @@ namespace MediaToolkit.Adapters.FFmpeg
                 $"-i \"{options.InputFile}\""
             };
 
+            // 用于合并所有视频滤镜 (-vf) 的列表
+            var videoFilters = new List<string>();
+
             // 视频编码设置
             if (!options.OmitVideo)
             {
@@ -513,15 +516,45 @@ namespace MediaToolkit.Adapters.FFmpeg
                 {
                     argsBuilder.Add($"-crf {options.Crf.Value}");
                 }
+
+                if (options.GopSize.HasValue)
+                {
+                    argsBuilder.Add($"-g {options.GopSize.Value}");
+                    // 确保严格的GOP，自动设置keyint_min与gopsize相同
+                    argsBuilder.Add($"-keyint_min {options.GopSize.Value}");
+                }
+                if (options.SceneCutThreshold.HasValue)
+                {
+                    argsBuilder.Add($"-sc_threshold {options.SceneCutThreshold.Value}");
+                }
+
                 if (!string.IsNullOrWhiteSpace(options.Resolution))
                 {
-                    argsBuilder.Add($"-s {options.Resolution}");
+                    // 不再使用 -s 参数，而是用 scale 滤镜，便于和其他滤镜链式调用
+                    videoFilters.Add($"scale={options.Resolution}");
                 }
                 if (options.OutputFps.HasValue)
                 {
-                    argsBuilder.Add($"-vf \"fps={options.OutputFps.Value}\"");
-                    // 更高级插值方案，如果需要使用 minterpolate 插件来插帧，插值滤镜 minterpolate 对 CPU 要求较高，适合高质量输出，可以取消注释以下行
-                    //argsBuilder.Add($"-vf \"minterpolate='fps={options.OutputFps.Value}'\"");
+                    videoFilters.Add($"fps={options.OutputFps.Value}");
+                }
+
+                if (videoFilters.Count > 0)
+                {
+                    argsBuilder.Add($"-vf \"{string.Join(",", videoFilters)}\"");
+                }
+                if (!string.IsNullOrWhiteSpace(options.MaxBitrate))
+                    argsBuilder.Add($"-maxrate {options.MaxBitrate}");
+                if (!string.IsNullOrWhiteSpace(options.MinBitrate))
+                    argsBuilder.Add($"-minrate {options.MinBitrate}");
+                if (!string.IsNullOrWhiteSpace(options.BufferSize))
+                    argsBuilder.Add($"-bufsize {options.BufferSize}");
+                if (!string.IsNullOrWhiteSpace(options.Profile))
+                {
+                    argsBuilder.Add($"-profile:v {options.Profile}");
+                }
+                if (!string.IsNullOrWhiteSpace(options.Level))
+                {
+                    argsBuilder.Add($"-level {options.Level}");
                 }
             }
             else
@@ -537,6 +570,12 @@ namespace MediaToolkit.Adapters.FFmpeg
                 {
                     argsBuilder.Add($"-b:a {options.AudioBitrate}");
                 }
+                if (!string.IsNullOrWhiteSpace(options.AudioSampleRate))
+                {
+                    argsBuilder.Add($"-ar {options.AudioSampleRate}");
+                }
+                if (options.AudioChannels.HasValue)
+                    argsBuilder.Add($"-ac {options.AudioChannels.Value}");
             }
             else
             {
@@ -550,10 +589,26 @@ namespace MediaToolkit.Adapters.FFmpeg
             }
 
             // 核心的流媒体格式化参数
-            // faststart: 将 moov box 移到文件开头，便于快速播放
-            // frag_keyframe: 在每个关键帧处开始新的片段，提高 SEEK 精度
-            // separate_moof: 将每个片段的 moof box 放置在片段数据之前，便于解析
-            argsBuilder.Add("-movflags +faststart+frag_keyframe+separate_moof");
+            // - faststart: 将 moov box 移到文件开头，便于快速播放
+            // - frag_keyframe: 在每个关键帧处开始新的片段，提高 SEEK 精度
+            // - separate_moof: 将每个片段的 moof box 放置在片段数据之前，便于解析;将每个 GOP（关键帧）单独放到一个 moof+mdat 片段中，而不是把所有媒体数据塞进一个大的 mdat 里
+            // - empty_moov: 生成一个空的 moov box，确保文件结构正确（只用于初始化播放器）
+            // - default_base_moof: 使 moof 中 base_data_offset 为 0，简化偏移解析
+            // - write_colr: 写入色彩信息，提高兼容性
+            // 示例组合（按实际用途切换启用）：
+            // 普通流播放，moov 在前，关键帧分片，支持 base_offset，写入色彩信息
+            // argsBuilder.Add("-movflags +default_base_moof+faststart+frag_keyframe+separate_moof+write_colr");
+            // 初始化空结构（用于 MSE 初始化流）
+            // argsBuilder.Add("-movflags +empty_moov+default_base_moof+faststart+frag_keyframe+separate_moof+write_colr");
+            // 简化结构（无 separate_moof）
+            // argsBuilder.Add("-movflags +faststart+default_base_moof+frag_keyframe+empty_moov");
+            // 另一种轻量组合
+            // argsBuilder.Add("-movflags +faststart+frag_keyframe+separate_moof+empty_moov");
+
+            //argsBuilder.Add("-movflags +default_base_moof+faststart+frag_keyframe+separate_moof+write_colr");
+            //argsBuilder.Add("-movflags +empty_moov+default_base_moof+faststart+frag_keyframe+separate_moof+write_colr");
+            argsBuilder.Add("-movflags +faststart+default_base_moof+frag_keyframe+empty_moov");
+            //argsBuilder.Add("-movflags +faststart+frag_keyframe+separate_moof+empty_moov");
 
             // 输出格式和路径
             // 使用 .m4s 扩展名是常见的做法，以明确表示这是一个媒体段文件，
