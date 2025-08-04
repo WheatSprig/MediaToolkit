@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\MediaToolkit.Adapters.Bento4\MediaToolkit.Adapters.Bento4.csproj" />
     <ProjectReference Include="..\MediaToolkit.Adapters.FFmpeg\MediaToolkit.Adapters.FFmpeg.csproj" />
   </ItemGroup>
 

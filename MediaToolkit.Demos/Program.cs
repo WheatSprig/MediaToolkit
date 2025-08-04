@@ -1,4 +1,5 @@
-﻿using MediaToolkit.Adapters.FFmpeg;
+﻿using MediaToolkit.Adapters.Bento4;
+using MediaToolkit.Adapters.FFmpeg;
 using MediaToolkit.Adapters.FFmpeg.Models;
 using MediaToolkit.Core;
 using System;
@@ -36,14 +37,36 @@ internal class Program
             Console.WriteLine($"成功找到 FFmpeg: {ffmpeg.ExecutablePath}");
 
             // --- 演示 1: 获取元数据 ---
-            await DemoGetMetadataAsync(ffmpeg, inputFile);
+            //await DemoGetMetadataAsync(ffmpeg, inputFile);
 
             // --- 演示 2: 转换为DASH切片格式 (多文件) ---
             // 注意: 此演示会生成多个文件，耗时较长。如果只想测试演示3，可以注释掉下面这行。
             //await DemoConvertToDashAsync(ffmpeg, inputFile, outputDir);
 
             // --- 演示 3: 生成单文件 fMP4 流 ---
-            await DemoGenerateFragmentedMp4Async(ffmpeg, inputFile, outputDir);
+            //await DemoGenerateFragmentedMp4Async(ffmpeg, inputFile, outputDir);
+
+            // Bento4演示
+            try
+            {
+                // 验证Bento4是否可用（通过任意工具检测）
+                var testBento4 = new Mp4InfoAdapter();
+                Console.WriteLine($"\n成功找到 Bento4 工具集: {Path.GetDirectoryName(testBento4.ExecutablePath)}");
+
+                // --- Bento4 演示（可按需注释） ---
+                await DemoBento4Mp4InfoAsync(inputFile);
+                await DemoBento4Mp4FragmentAsync(inputFile, outputDir);
+                await DemoBento4Mp4SplitAsync(inputFile, outputDir);
+                await DemoBento4EncryptDecryptAsync(inputFile, outputDir);
+            }
+            catch (FileNotFoundException ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"\nBento4 工具未找到: {ex.Message}");
+                Console.WriteLine("请安装Bento4并配置BENTO4_PATH环境变量以启用Bento4演示");
+                Console.ResetColor();
+            }
+
         }
         catch (FileNotFoundException ex)
         {
@@ -60,6 +83,7 @@ internal class Program
         }
     }
 
+    #region FFmpeg 演示函数
     private static async Task DemoGetMetadataAsync(FFmpegAdapter ffmpeg, string inputFile)
     {
         Console.WriteLine("\n--- 演示1: 获取元数据 ---");
@@ -237,9 +261,171 @@ internal class Program
 
         ffmpeg.ProgressChanged -= OnProgressChanged;
     }
+    #endregion
 
+    #region Bento4 演示函数（新增）
+    /// <summary>
+    /// Bento4演示1: 使用mp4info查看媒体信息
+    /// </summary>
+    private static async Task DemoBento4Mp4InfoAsync(string inputFile)
+    {
+        Console.WriteLine("\n--- Bento4 演示1: 使用mp4info查看媒体信息 ---");
+        var mp4Info = new Mp4InfoAdapter();
+        mp4Info.LogReceived += (s, e) => Console.WriteLine($"  [信息] {e}");
 
+        try
+        {
+            // 获取详细信息
+            var result = await mp4Info.GetInfoAsync(inputFile, detailed: true);
+            if (result.ExitCode == 0)
+            {
+                Console.WriteLine("  信息获取成功（部分输出如上）");
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  执行失败: {result.Error}");
+                Console.ResetColor();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  错误: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
 
+    /// <summary>
+    /// Bento4演示2: 使用mp4fragment生成片段化MP4
+    /// </summary>
+    private static async Task DemoBento4Mp4FragmentAsync(string inputFile, string outputDir)
+    {
+        Console.WriteLine("\n--- Bento4 演示2: 使用mp4fragment生成HLS兼容片段 ---");
+        var fragmenter = new Mp4FragmentAdapter();
+        fragmenter.LogReceived += (s, e) => Console.WriteLine($"  [片段化] {e}");
+
+        string outputFile = Path.Combine(outputDir, "bento4_fragmented.mp4");
+        try
+        {
+            // 生成适合HLS的片段化MP4
+            var result = await fragmenter.FragmentForHlsAsync(inputFile, outputFile, fragmentDurationMs: 2000);
+
+            if (result.ExitCode == 0)
+            {
+                Console.WriteLine($"  片段化完成: {outputFile}");
+                Console.WriteLine($"  文件大小: {new FileInfo(outputFile).Length / 1024 / 1024:F2} MB");
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  片段化失败: {result.Error}");
+                Console.ResetColor();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  错误: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+
+    /// <summary>
+    /// Bento4演示3: 使用mp4split分割视频片段
+    /// </summary>
+    private static async Task DemoBento4Mp4SplitAsync(string inputFile, string outputDir)
+    {
+        Console.WriteLine("\n--- Bento4 演示3: 使用mp4split分割视频 ---");
+        var splitter = new Mp4SplitAdapter();
+        splitter.LogReceived += (s, e) => Console.WriteLine($"  [分割] {e}");
+
+        string outputFile = Path.Combine(outputDir, "bento4_segment.mp4");
+        try
+        {
+            // 从第30秒开始，提取10秒片段
+            var result = await splitter.ExtractSegmentAsync(inputFile, outputFile, startTime: 30, duration: 10);
+
+            if (result.ExitCode == 0)
+            {
+                Console.WriteLine($"  片段提取完成: {outputFile}");
+                Console.WriteLine($"  片段时长: 10秒（从第30秒开始）");
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"  分割失败: {result.Error}");
+                Console.ResetColor();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  错误: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+
+    /// <summary>
+    /// Bento4演示4: 使用mp4encrypt/mp4decrypt进行加密解密
+    /// </summary>
+    private static async Task DemoBento4EncryptDecryptAsync(string inputFile, string outputDir)
+    {
+        Console.WriteLine("\n--- Bento4 演示4: 加密与解密视频 ---");
+
+        // 准备路径
+        string encryptedFile = Path.Combine(outputDir, "bento4_encrypted.mp4");
+        string decryptedFile = Path.Combine(outputDir, "bento4_decrypted.mp4");
+        string testKey = "112233445566778899aabbccddeeff00"; // 示例密钥（实际使用需安全管理）
+        string testKeyId = "aabbccddeeff11223344556677889900";
+
+        try
+        {
+            // 1. 加密文件
+            var encryptor = new Mp4EncryptAdapter();
+            encryptor.LogReceived += (s, e) => Console.WriteLine($"  [加密] {e}");
+            Console.WriteLine("  > 正在加密文件...");
+
+            var encryptResult = await encryptor.EncryptAsync(
+                inputFile,
+                encryptedFile,
+                key: testKey,
+                keyId: testKeyId);
+
+            if (encryptResult.ExitCode != 0)
+            {
+                throw new Exception($"加密失败: {encryptResult.Error}");
+            }
+
+            // 2. 解密文件
+            var decryptor = new Mp4DecryptAdapter();
+            decryptor.LogReceived += (s, e) => Console.WriteLine($"  [解密] {e}");
+            Console.WriteLine("  > 正在解密文件...");
+
+            var decryptResult = await decryptor.DecryptAsync(
+                encryptedFile,
+                decryptedFile,
+                key: testKey);
+
+            if (decryptResult.ExitCode != 0)
+            {
+                throw new Exception($"解密失败: {decryptResult.Error}");
+            }
+
+            Console.WriteLine($"  加密文件: {encryptedFile}");
+            Console.WriteLine($"  解密文件: {decryptedFile}");
+            Console.WriteLine("  加密解密流程完成（可对比原文件与解密文件）");
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  错误: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+    #endregion
+
+    // 进度显示辅助函数（共用）
     private static void OnProgressChanged(object? sender, ProgressEventArgs e)
     {
         var percent = (int)(e.Progress * 100);
