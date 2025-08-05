@@ -1,6 +1,7 @@
 ﻿using MediaToolkit.Core;
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -39,6 +40,19 @@ namespace MediaToolkit.Adapters.Bento4
         public Mp4SplitAdapter(string toolSetPath = null)
             : base("mp4split", toolSetPath)
         {
+        }
+
+        protected override void ParseProgress(string logLine)
+        {
+            // mp4split的进度格式示例：Split segment 3 of 15 (20%)
+            var match = Regex.Match(logLine, @"Split segment (\d+) of (\d+)", RegexOptions.IgnoreCase);
+            if (match.Success &&
+                int.TryParse(match.Groups[1].Value, out int current) &&
+                int.TryParse(match.Groups[2].Value, out int total))
+            {
+                //SegmentProgressChanged?.Invoke(this, new SegmentProgressEventArgs(current, total));
+                OnSegmentProgressChanged(new SegmentProgressEventArgs(current, total));
+            }
         }
 
         /// <summary>

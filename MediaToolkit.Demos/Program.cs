@@ -158,13 +158,13 @@ internal class Program
         };
 
         // 订阅进度事件
-        ffmpeg.ProgressChanged += OnProgressChanged;
+        ffmpeg.ProgressChanged += OnProgress;
 
         Console.WriteLine($"  输出目录: {outputDir}");
         await ffmpeg.GenerateDashAsync(options, threads: 2);
 
         // 取消订阅，避免影响其他任务
-        ffmpeg.ProgressChanged -= OnProgressChanged;
+        ffmpeg.ProgressChanged -= OnProgress;
 
         Console.WriteLine("\n  DASH 转换完成!");
         Console.WriteLine($"  清单文件位于: {manifestPath}");
@@ -174,7 +174,7 @@ internal class Program
     {
         Console.WriteLine("\n--- 演示3: 生成单文件 FMP4 流 (分离音视频 到 单文件 HTTP 伪流) ---");
 
-        ffmpeg.ProgressChanged += OnProgressChanged;
+        ffmpeg.ProgressChanged += OnProgress;
 
         // --- 子演示 3.1: 合并音视频到单个 fMP4 文件 ---
         string outputFmp4Merged = Path.Combine(outputDir, "fmp4_merged.mp4");
@@ -259,7 +259,7 @@ internal class Program
             Console.ResetColor();
         }
 
-        ffmpeg.ProgressChanged -= OnProgressChanged;
+        ffmpeg.ProgressChanged -= OnProgress;
     }
     #endregion
 
@@ -400,6 +400,8 @@ internal class Program
             // 1. 加密文件
             var encryptor = new Mp4EncryptAdapter();
             encryptor.LogReceived += (s, e) => Console.WriteLine($"  [加密] {e}");
+            // 订阅加密进度事件
+            encryptor.SegmentProgressChanged += OnProgress;
             Console.WriteLine("  > 正在加密文件...");
 
             // 定义轨道密钥（假设加密所有轨道，这里使用轨道ID=1作为示例）
@@ -424,9 +426,14 @@ internal class Program
                 throw new Exception($"加密失败: {encryptResult.Error}");
             }
 
+            // 取消加密进度订阅
+            encryptor.SegmentProgressChanged -= OnProgress;
+
             // 2. 解密文件（使用完善后的解密适配器）
             var decryptor = new Mp4DecryptAdapter();
-            decryptor.LogReceived += (s, e) => Console.WriteLine($"  [解密] {e}");
+            //decryptor.LogReceived += (s, e) => Console.WriteLine($"  [解密] {e}");
+            // 订阅解密进度事件
+            decryptor.SegmentProgressChanged += OnProgress;
             Console.WriteLine("  > 正在解密文件...");
 
             // 定义解密密钥（需与加密时的轨道ID和密钥对应）
@@ -450,6 +457,9 @@ internal class Program
                 throw new Exception($"解密失败: {decryptResult.Error}");
             }
 
+            // 取消解密进度订阅
+            decryptor.SegmentProgressChanged -= OnProgress;
+
         }
         catch (Exception ex)
         {
@@ -462,7 +472,7 @@ internal class Program
     #endregion
 
     // 进度显示辅助函数（共用）
-    private static void OnProgressChanged(object? sender, ProgressEventArgs e)
+    private static void OnProgress(object? sender, IProgressReport e)
     {
         var percent = (int)(e.Progress * 100);
         Console.Write($"\r  处理中... [{new string('■', percent / 5).PadRight(20)}] {percent}%");

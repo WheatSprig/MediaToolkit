@@ -21,6 +21,15 @@ namespace MediaToolkit.Adapters.Bento4
         }
 
         /// <summary>
+        /// 进度抽象方法（无进度输出，空实现）
+        /// </summary>
+        /// <param name="logLine"></param>
+        protected override void ParseProgress(string logLine)
+        {
+            // mp4info 仅输出文件信息，无进度输出，无需处理
+        }
+
+        /// <summary>
         /// 执行mp4info命令获取文件信息
         /// </summary>
         /// <param name="inputFile">MP4文件路径</param>

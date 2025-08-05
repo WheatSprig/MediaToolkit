@@ -1,11 +1,12 @@
-﻿using System;
+﻿using MediaToolkit.Core;
+using System;
 using System.Collections.Generic;
 using System.Text;
 
 namespace MediaToolkit.Adapters.FFmpeg
 {
     // 定义一个进度事件参数类
-    public class ProgressEventArgs : EventArgs
+    public class ProgressEventArgs : EventArgs, IProgressReport
     {
         /// <summary>
         /// 为进度报告事件提供数据。

@@ -1,7 +1,8 @@
-﻿using System;
+﻿using MediaToolkit.Core;
+using System;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using MediaToolkit.Core;
 
 namespace MediaToolkit.Adapters.Bento4
 {
@@ -26,6 +27,19 @@ namespace MediaToolkit.Adapters.Bento4
         public Mp4FragmentAdapter(string toolSetPath = null)
             : base("mp4fragment", toolSetPath)
         {
+        }
+
+        protected override void ParseProgress(string logLine)
+        {
+            // mp4fragment的进度格式示例：Fragmenting... [10%] Processed 00:00:02 of 00:00:20
+            var match = Regex.Match(logLine, @"Processed (\d+:\d+:\d+) of (\d+:\d+:\d+)", RegexOptions.IgnoreCase);
+            if (match.Success &&
+                TimeSpan.TryParse(match.Groups[1].Value, out TimeSpan processed) &&
+                TimeSpan.TryParse(match.Groups[2].Value, out TimeSpan total))
+            {
+                //ProgressChanged?.Invoke(this, new ProgressEventArgs(processed, total));
+                OnProgressChanged(new ProgressEventArgs(processed, total));
+            }
         }
 
         /// <summary>

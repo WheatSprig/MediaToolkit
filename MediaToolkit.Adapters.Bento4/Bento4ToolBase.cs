@@ -24,6 +24,11 @@ namespace MediaToolkit.Adapters.Bento4
     {
         private readonly ProcessRunner processRunner;
 
+        // 新增进度事件
+        public event EventHandler<ProgressEventArgs> ProgressChanged;
+        public event EventHandler<SegmentProgressEventArgs> SegmentProgressChanged;
+        public event EventHandler<string> LogReceived;
+
         /// <summary>
         /// 初始化Bento4工具基类
         /// </summary>
@@ -34,7 +39,7 @@ namespace MediaToolkit.Adapters.Bento4
             ToolName = toolName ?? throw new ArgumentNullException(nameof(toolName));
             ExecutablePath = Bento4ToolFinder.FindToolExecutable(toolName, toolSetPath);
             processRunner = new ProcessRunner(ExecutablePath);
-            processRunner.LogReceived += (s, e) => LogReceived?.Invoke(this, e);
+            processRunner.LogReceived += OnLogReceived; // 订阅日志事件
         }
 
         /// <inheritdoc />
@@ -42,9 +47,6 @@ namespace MediaToolkit.Adapters.Bento4
 
         /// <inheritdoc />
         public string ExecutablePath { get; }
-
-        /// <inheritdoc />
-        public event EventHandler<string> LogReceived;
 
         /// <summary>
         /// 执行命令，内部自动增强错误提示
@@ -80,6 +82,50 @@ namespace MediaToolkit.Adapters.Bento4
                 throw new InvalidOperationException(enhancedMessage, ex);
             }
         }
+
+        #region 日志与进度处理
+        /// <summary>
+        /// 日志接收与进度解析
+        /// </summary>
+        private void OnLogReceived(object sender, string logLine)
+        {
+            // 触发日志事件
+            LogReceived?.Invoke(this, logLine);
+
+            if (string.IsNullOrEmpty(logLine)) return;
+
+            // 根据具体工具类型解析进度（交给子类实现）
+            ParseProgress(logLine);
+        }
+
+        /// <summary>
+        /// 由子类实现具体的进度解析逻辑
+        /// </summary>
+        protected abstract void ParseProgress(string logLine);
+
+        /// <summary>
+        /// 触发时长进度事件（供子类调用）
+        /// </summary>
+        /// <param name="e">进度参数</param>
+        protected void OnProgressChanged(ProgressEventArgs e)
+        {
+            // 调用事件的Invoke方法（仅基类内部可直接调用）
+            ProgressChanged?.Invoke(this, e);
+        }
+
+        /// <summary>
+        /// 触发片段进度事件（供子类调用）
+        /// </summary>
+        /// <param name="e">片段进度参数</param>
+        protected void OnSegmentProgressChanged(SegmentProgressEventArgs e)
+        {
+            // 调用事件的Invoke方法（仅基类内部可直接调用）
+            SegmentProgressChanged?.Invoke(this, e);
+        }
+
+        #endregion
+
+        #region 错误信息增强
 
         /// <summary>
         /// 增强错误信息，添加中文路径相关提示
@@ -126,5 +172,6 @@ namespace MediaToolkit.Adapters.Bento4
             }
             return false;
         }
+        #endregion
     }
 }

@@ -54,6 +54,11 @@ namespace MediaToolkit.Adapters.Bento4
         {
         }
 
+        protected override void ParseProgress(string logLine)
+        {
+            // mp4dump 不输出进度信息，无需处理
+        }
+
         /// <summary>
         /// 执行mp4dump命令
         /// </summary>

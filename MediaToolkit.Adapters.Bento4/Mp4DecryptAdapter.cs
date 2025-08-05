@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -32,6 +33,14 @@ namespace MediaToolkit.Adapters.Bento4
             public string Key { get; set; }
         }
 
+        // 匹配 "3884/150443" 格式的正则表达式
+        // @"\s+(\d+)/(\d+)\s+"
+        // @"\b(\d+)/(\d+)\b",
+        private static readonly Regex ProgressRegex = new Regex(
+            @"\b(\d+)/(\d+)\b",  // 匹配“数字/数字”格式，不严格限制前后空格
+            RegexOptions.Compiled | RegexOptions.IgnoreCase
+        );
+
         /// <summary>
         /// 初始化mp4decrypt工具适配器
         /// </summary>
@@ -39,6 +48,23 @@ namespace MediaToolkit.Adapters.Bento4
         public Mp4DecryptAdapter(string toolSetPath = null)
             : base("mp4decrypt", toolSetPath)
         {
+        }
+
+        protected override void ParseProgress(string logLine)
+        {
+            if (string.IsNullOrWhiteSpace(logLine))
+                return;
+
+            // 匹配日志中的 "当前值/总值"
+            var match = ProgressRegex.Match(logLine);
+            if (match.Success &&
+                int.TryParse(match.Groups[1].Value, out int current) &&
+                int.TryParse(match.Groups[2].Value, out int total) &&
+                total > 0)
+            {
+                // 触发片段进度事件（复用SegmentProgressEventArgs，基于计数的进度）
+                OnSegmentProgressChanged(new SegmentProgressEventArgs(current, total));
+            }
         }
 
         /// <summary>
