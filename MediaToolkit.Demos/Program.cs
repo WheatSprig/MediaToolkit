@@ -263,7 +263,7 @@ internal class Program
     }
     #endregion
 
-    #region Bento4 演示函数（新增）
+    #region Bento4 演示函数
     /// <summary>
     /// Bento4演示1: 使用mp4info查看媒体信息
     /// </summary>
@@ -332,24 +332,40 @@ internal class Program
     }
 
     /// <summary>
-    /// Bento4演示3: 使用mp4split分割视频片段
+    /// Bento4演示3: 使用mp4split分割为流媒体片段
     /// </summary>
     private static async Task DemoBento4Mp4SplitAsync(string inputFile, string outputDir)
     {
-        Console.WriteLine("\n--- Bento4 演示3: 使用mp4split分割视频 ---");
+        Console.WriteLine("\n--- Bento4 演示3: 使用mp4split分割为流媒体片段 ---");
+    
+        // 创建输出目录
+        if (!Directory.Exists(outputDir))
+        {
+            Directory.CreateDirectory(outputDir);
+        }
+
         var splitter = new Mp4SplitAdapter();
         splitter.LogReceived += (s, e) => Console.WriteLine($"  [分割] {e}");
 
-        string outputFile = Path.Combine(outputDir, "bento4_segment.mp4");
         try
         {
-            // 从第30秒开始，提取10秒片段
-            var result = await splitter.ExtractSegmentAsync(inputFile, outputFile, startTime: 30, duration: 10);
+            // 定义初始化片段和媒体片段路径
+            string initSegment = Path.Combine(outputDir, "init.mp4");
+            string mediaPattern = Path.Combine(outputDir, "segment_%llu.%04llu.m4s");
+
+            // 执行分割（默认分割所有轨道，生成初始化片段和媒体片段）
+            var result = await splitter.SplitAsync(
+                inputFile: inputFile,
+                initSegment: initSegment,
+                mediaSegmentPattern: mediaPattern,
+                startNumber: 1,
+                verbose: true);
 
             if (result.ExitCode == 0)
             {
-                Console.WriteLine($"  片段提取完成: {outputFile}");
-                Console.WriteLine($"  片段时长: 10秒（从第30秒开始）");
+                Console.WriteLine($"  分割完成:");
+                Console.WriteLine($"  - 初始化片段: {initSegment}");
+                Console.WriteLine($"  - 媒体片段模式: {mediaPattern}");
             }
             else
             {
@@ -377,7 +393,7 @@ internal class Program
         string encryptedFile = Path.Combine(outputDir, "bento4_encrypted.mp4");
         string decryptedFile = Path.Combine(outputDir, "bento4_decrypted.mp4");
         string testKey = "112233445566778899aabbccddeeff00"; // 示例密钥（实际使用需安全管理）
-        string testKeyId = "aabbccddeeff11223344556677889900";
+        string testIv = "aabbccddeeff1122"; // 16字符IV（符合128位加密要求）
 
         try
         {
@@ -386,35 +402,54 @@ internal class Program
             encryptor.LogReceived += (s, e) => Console.WriteLine($"  [加密] {e}");
             Console.WriteLine("  > 正在加密文件...");
 
+            // 定义轨道密钥（假设加密所有轨道，这里使用轨道ID=1作为示例）
+            var trackKeys = new List<Mp4EncryptAdapter.TrackKey>
+            {
+                new Mp4EncryptAdapter.TrackKey
+                {
+                    TrackId = 1,       // 轨道ID（1为常见视频轨道ID，实际需根据文件调整）
+                    Key = testKey,     // 加密密钥
+                    Iv = testIv        // 初始化向量
+                }
+            };
+
             var encryptResult = await encryptor.EncryptAsync(
-                inputFile,
-                encryptedFile,
-                key: testKey,
-                keyId: testKeyId);
+                inputFile: inputFile,
+                outputFile: encryptedFile,
+                method: Mp4EncryptAdapter.EncryptionMethod.MpegCenc, // 使用MPEG通用加密标准
+                trackKeys: trackKeys);
 
             if (encryptResult.ExitCode != 0)
             {
                 throw new Exception($"加密失败: {encryptResult.Error}");
             }
 
-            // 2. 解密文件
+            // 2. 解密文件（使用完善后的解密适配器）
             var decryptor = new Mp4DecryptAdapter();
             decryptor.LogReceived += (s, e) => Console.WriteLine($"  [解密] {e}");
             Console.WriteLine("  > 正在解密文件...");
 
+            // 定义解密密钥（需与加密时的轨道ID和密钥对应）
+            var decryptKeys = new List<Mp4DecryptAdapter.DecryptionKey>
+            {
+                new Mp4DecryptAdapter.DecryptionKey
+                {
+                    Id = "1", // 对应加密时的轨道ID=1
+                    Key = testKey // 与加密密钥相同
+                }
+            };
+
             var decryptResult = await decryptor.DecryptAsync(
-                encryptedFile,
-                decryptedFile,
-                key: testKey);
+            inputFile: encryptedFile,
+            outputFile: decryptedFile,
+            keys: decryptKeys,
+            showProgress: true);
 
             if (decryptResult.ExitCode != 0)
             {
                 throw new Exception($"解密失败: {decryptResult.Error}");
             }
 
-            Console.WriteLine($"  加密文件: {encryptedFile}");
-            Console.WriteLine($"  解密文件: {decryptedFile}");
-            Console.WriteLine("  加密解密流程完成（可对比原文件与解密文件）");
         }
         catch (Exception ex)
         {
@@ -423,6 +458,7 @@ internal class Program
             Console.ResetColor();
         }
     }
+
     #endregion
 
     // 进度显示辅助函数（共用）

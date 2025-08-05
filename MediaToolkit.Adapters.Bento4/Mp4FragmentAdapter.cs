@@ -85,50 +85,43 @@ namespace MediaToolkit.Adapters.Bento4
             if (sequenceNumberStart.HasValue && sequenceNumberStart <= 0)
                 throw new ArgumentOutOfRangeException(nameof(sequenceNumberStart), "起始序列号必须大于0");
 
-            // 为路径添加双引号，处理路径中的特殊字符和空格
-            string quotedInput = PathHelper.AddQuotes(inputFile);
-            string quotedOutput = PathHelper.AddQuotes(outputFile);
-
-            var argsBuilder = new System.Text.StringBuilder();
+            // 使用自定义ArgumentBuilder构建参数
+            var argsBuilder = new ArgumentBuilder();
 
             // 通用参数
-            if (verbosity > 0)
-                argsBuilder.Append($"--verbosity {verbosity} ");
-            if (debug)
-                argsBuilder.Append("--debug ");
-            if (quiet)
-                argsBuilder.Append("--quiet ");
+            argsBuilder.Append($"--verbosity {verbosity}", verbosity > 0);
+            argsBuilder.Append("--debug", debug);
+            argsBuilder.Append("--quiet", quiet);
 
             // 片段化核心参数
             if (fragmentDurationMs.HasValue)
-                argsBuilder.Append($"--fragment-duration {fragmentDurationMs} ");  // 单位：毫秒
+                argsBuilder.Append("--fragment-duration", fragmentDurationMs.ToString());
             if (timescale.HasValue)
-                argsBuilder.Append($"--timescale {timescale} ");
+                argsBuilder.Append("--timescale", timescale.ToString());
             if (!string.IsNullOrEmpty(trackFilter))
-                argsBuilder.Append($"--track {trackFilter} ");
-            if (createIndex)
-                argsBuilder.Append("--index ");
-            if (trimExcess)
-                argsBuilder.Append("--trim ");
-            if (noTfdt)
-                argsBuilder.Append("--no-tfdt ");
+                argsBuilder.Append("--track", trackFilter);
+            argsBuilder.Append("--index", createIndex);
+            argsBuilder.Append("--trim", trimExcess);
+            argsBuilder.Append("--no-tfdt", noTfdt);
             if (tfdtStartTime.HasValue)
-                argsBuilder.Append($"--tfdt-start {tfdtStartTime} ");
+                argsBuilder.Append("--tfdt-start", tfdtStartTime.ToString());
             if (sequenceNumberStart.HasValue)
-                argsBuilder.Append($"--sequence-number-start {sequenceNumberStart} ");
+                argsBuilder.Append("--sequence-number-start", sequenceNumberStart.ToString());
             if (forceIFrameSync != ForceIFrameSyncMode.None)
-                argsBuilder.Append($"--force-i-frame-sync {forceIFrameSync.ToString().ToLowerInvariant()} ");
-            if (copyUdta)
-                argsBuilder.Append("--copy-udta ");
-            if (noZeroElst)
-                argsBuilder.Append("--no-zero-elst ");
-            if (trunVersionZero)
-                argsBuilder.Append("--trun-version-zero ");
+                argsBuilder.Append(
+                    "--force-i-frame-sync", 
+                    forceIFrameSync.ToString().ToLowerInvariant()
+                );
+            argsBuilder.Append("--copy-udta", copyUdta);
+            argsBuilder.Append("--no-zero-elst", noZeroElst);
+            argsBuilder.Append("--trun-version-zero", trunVersionZero);
 
-            // 输入输出文件（使用带引号的路径）
-            argsBuilder.Append($"{quotedInput} {quotedOutput}");
+            // 输入输出文件（ArgumentBuilder会自动处理空格和特殊字符）
+            argsBuilder.Append(inputFile);
+            argsBuilder.Append(outputFile);
 
-            string fullCommand = $"{ExecutablePath} {argsBuilder.ToString()}";
+            string args = argsBuilder.ToString();
+            string fullCommand = $"{ExecutablePath} {args}";
             Console.WriteLine($"  [调试] 执行命令: {fullCommand}");
 
             // 工作目录处理
@@ -139,7 +132,7 @@ namespace MediaToolkit.Adapters.Bento4
             }
 
             return ExecuteAsync(
-                argsBuilder.ToString(),
+                args,
                 cancellationToken,
                 workingDir);
         }
