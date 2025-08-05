@@ -1,0 +1,15 @@
+{
+  "name": "MediaToolkit Dev",
+  "dockerFile": "MediaToolkit.Demos/Dockerfile",
+  "context": "..",
+  "runArgs": [ "--init" ],
+  "settings": {
+    "terminal.integrated.defaultProfile.linux": "bash"
+  },
+  "extensions": [
+    "ms-dotnettools.csharp",
+    "ms-vscode.cpptools",
+    "ms-vscode.vscode-typescript-next"
+  ],
+  "postCreateCommand": "dotnet restore MediaToolkit.Demos/MediaToolkit.Demos.csproj"
+}
