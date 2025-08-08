@@ -1,11 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>netstandard2.0</TargetFramework>
+		
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<PackageId>MediaToolkit.Adapters.Bento4</PackageId>
+		<Version>1.0.0</Version>
+		<Authors>MaiSui</Authors>
+		<Description>Bento4 adapter for MediaToolkit.Core. Provides a wrapper for executing Bento4 toolkit commands for MP4 processing.</Description>
+		<Copyright>Copyright (c) MaiSui 2025</Copyright>
+		<PackageTags>media;toolkit;bento4;adapter;wrapper;mp4;dash</PackageTags>
+		<RepositoryUrl>https://github.com/WheatSprig/MediaToolkit.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
 
-  <ItemGroup>
-    <ProjectReference Include="..\MediaToolkit.Core\MediaToolkit.Core.csproj" />
-  </ItemGroup>
+		<!-- SourceLink 调试 -->
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\MediaToolkit.Core\MediaToolkit.Core.csproj" />
+	</ItemGroup>
 
 </Project>

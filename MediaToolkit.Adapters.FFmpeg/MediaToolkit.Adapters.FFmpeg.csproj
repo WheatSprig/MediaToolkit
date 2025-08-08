@@ -1,11 +1,28 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>netstandard2.0</TargetFramework>
+		
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<PackageId>MediaToolkit.Adapters.FFmpeg</PackageId>
+		<Version>1.0.0</Version>
+		<Authors>MaiSui</Authors>
+		<Description>FFmpeg adapter for MediaToolkit.Core. Provides a wrapper for executing FFmpeg commands.</Description>
+		<Copyright>Copyright (c) Maisui 2025</Copyright>
+		<PackageTags>media;toolkit;ffmpeg;adapter;wrapper;transcode</PackageTags>
+		<RepositoryUrl>https://github.com/WheatSprig/MediaToolkit.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
 
-  <ItemGroup>
-    <ProjectReference Include="..\MediaToolkit.Core\MediaToolkit.Core.csproj" />
-  </ItemGroup>
+		<!-- SourceLink 调试 -->
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\MediaToolkit.Core\MediaToolkit.Core.csproj" />
+	</ItemGroup>
 
 </Project>
